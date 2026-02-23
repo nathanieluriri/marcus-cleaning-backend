@@ -10,10 +10,19 @@ from repositories.customer_repo import (
     update_user,
     delete_user,
 )
-from schemas.customer_schema import CustomerCreate, CustomerUpdate, CustomerOut,CustomerBase,CustomerRefresh
+from schemas.customer_schema import (
+    CustomerBase,
+    CustomerCreate,
+    CustomerOut,
+    CustomerRefresh,
+    CustomerSignupRequest,
+    CustomerUpdate,
+)
+from schemas.imports import AccountStatus
 from security.hash import check_password
 from repositories.tokens_repo import get_refresh_tokens,delete_access_token,delete_refresh_token,delete_all_tokens_with_user_id
 from services.auth_helpers import issue_tokens_for_user
+from services.role_permission_template_service import get_effective_permission_list_for_role
 from authlib.integrations.starlette_client import OAuth
 import os
 from dotenv import load_dotenv
@@ -30,7 +39,18 @@ oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={'scope': 'openid email profile'},
 )
-async def add_user(user_data: CustomerCreate) -> CustomerOut:
+
+
+async def _build_customer_create_payload(user_data: CustomerSignupRequest) -> CustomerCreate:
+    permission_list = await get_effective_permission_list_for_role("customer")
+    return CustomerCreate(
+        **user_data.model_dump(),
+        accountStatus=AccountStatus.ACTIVE,
+        permissionList=permission_list,
+    )
+
+
+async def add_user(user_data: CustomerSignupRequest) -> CustomerOut:
     """adds an entry of CustomerCreate to the database and returns an object
 
     Returns:
@@ -38,7 +58,8 @@ async def add_user(user_data: CustomerCreate) -> CustomerOut:
     """
     customer =  await get_user(filter_dict={"email":user_data.email})
     if customer==None:
-        new_user= await create_user(user_data)
+        customer_create_payload = await _build_customer_create_payload(user_data=user_data)
+        new_user= await create_user(customer_create_payload)
         access_token, refresh_token = await issue_tokens_for_user(user_id=new_user.id, role="customer") # type: ignore
         new_user.password=""
         new_user.access_token= access_token
@@ -152,11 +173,12 @@ async def update_user_by_id(user_id: str, user_data: CustomerUpdate, is_password
         QueueManager.get_instance().enqueue("delete_tokens", {"userId": user_id})
     return result
 
-async def authenticate_user_google(user_data: CustomerBase) -> CustomerOut:
+async def authenticate_user_google(user_data: CustomerSignupRequest) -> CustomerOut:
     customer = await get_user(filter_dict={"email": user_data.email})
 
     if customer is None:
-        new_user = await create_user(CustomerCreate(**user_data.model_dump()))
+        customer_create_payload = await _build_customer_create_payload(user_data=user_data)
+        new_user = await create_user(customer_create_payload)
         customer = new_user
 
     access_token, refresh_token = await issue_tokens_for_user(user_id=customer.id, role="customer") # type: ignore

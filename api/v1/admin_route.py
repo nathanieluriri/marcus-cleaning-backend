@@ -1,9 +1,10 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, status
 
 from core.response_envelope import document_response
 from schemas.admin_schema import AdminBase, AdminCreate, AdminLogin, AdminOut, AdminRefresh
+from schemas.role_permission_template_schema import RolePermissionTemplateUpdate
 from security.account_status_check import check_admin_account_status_and_permissions
 from security.auth import verify_admin_refresh_token
 from security.principal import AuthPrincipal
@@ -13,6 +14,11 @@ from services.admin_service import (
     refresh_admin_tokens_reduce_number_of_logins,
     remove_admin,
     retrieve_admins,
+)
+from services.role_permission_template_service import (
+    get_role_permission_template_view,
+    rollout_role_permission_template_for_role,
+    set_role_permission_template_for_role,
 )
 
 router = APIRouter(prefix="/admins", tags=["Admins"])
@@ -43,6 +49,40 @@ async def list_admins(
 @document_response(message="Admin profile fetched successfully")
 async def get_my_admin(admin: AdminOut = Depends(check_admin_account_status_and_permissions)):
     return admin
+
+
+@router.get("/permission-templates/{role}")
+@document_response(message="Role permission template fetched successfully")
+async def get_role_permission_template(
+    role: Literal["cleaner", "customer"],
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    _ = admin
+    return await get_role_permission_template_view(role=role)
+
+
+@router.put("/permission-templates/{role}")
+@document_response(message="Role permission template updated successfully")
+async def set_role_permission_template(
+    role: Literal["cleaner", "customer"],
+    payload: RolePermissionTemplateUpdate,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await set_role_permission_template_for_role(
+        role=role,
+        permission_list=payload.permissionList,
+        admin_id=admin.id or "",
+    )
+
+
+@router.post("/permission-templates/{role}/rollout")
+@document_response(message="Role permission rollout completed successfully")
+async def rollout_role_permission_template(
+    role: Literal["cleaner", "customer"],
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    _ = admin
+    return await rollout_role_permission_template_for_role(role=role)
 
 
 @router.post("/signup")

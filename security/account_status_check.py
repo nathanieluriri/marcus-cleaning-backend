@@ -4,9 +4,9 @@ from importlib import import_module
 
 from fastapi import Depends, Request, status
 
-from core.errors import AppException, ErrorCode, auth_permission_denied
+from core.errors import AppException, ErrorCode, auth_permission_denied, auth_role_mismatch
 from schemas.imports import AccountStatus, PermissionList
-from security.auth import verify_admin_token, verify_cleaner_token, verify_customer_token
+from security.auth import verify_admin_token, verify_any_token, verify_cleaner_token, verify_customer_token
 from security.permissions import make_permission_key
 from security.principal import AuthPrincipal
 from services.admin_service import retrieve_admin_by_admin_id
@@ -96,7 +96,7 @@ async def _check_non_admin_account_status_and_permissions(
     _validate_permission_list(permission_list)
 
     if not _has_permission(
-        permission_list=permission_list,
+        permission_list=permission_list, # type: ignore
         permission_key=permission_key,
         endpoint_name=endpoint_name,
         request_method=request_method,
@@ -130,7 +130,7 @@ async def check_admin_account_status_and_permissions(
     _validate_permission_list(permission_list)
 
     if not _has_permission(
-        permission_list=permission_list,
+        permission_list=permission_list, # type: ignore
         permission_key=permission_key,
         endpoint_name=endpoint_name,
         request_method=request_method,
@@ -149,6 +149,27 @@ async def check_cleaner_account_status_and_permissions(
         principal=principal,
         role="cleaner",
     )
+
+
+async def check_user_account_status_and_permissions(
+    request: Request,
+    principal: AuthPrincipal = Depends(verify_any_token),
+):
+    if principal.role == "cleaner":
+        return await _check_non_admin_account_status_and_permissions(
+            request=request,
+            principal=principal,
+            role="cleaner",
+        )
+    if principal.role == "customer":
+        return await _check_non_admin_account_status_and_permissions(
+            request=request,
+            principal=principal,
+            role="customer",
+        )
+    raise auth_role_mismatch(required_role="cleaner|customer", actual_role=principal.role)
+
+
 async def check_customer_account_status_and_permissions(
     request: Request,
     principal: AuthPrincipal = Depends(verify_customer_token),

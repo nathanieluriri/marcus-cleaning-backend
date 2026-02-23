@@ -10,10 +10,19 @@ from repositories.cleaner_repo import (
     update_user,
     delete_user,
 )
-from schemas.cleaner_schema import CleanerCreate, CleanerUpdate, CleanerOut,CleanerBase,CleanerRefresh
+from schemas.cleaner_schema import (
+    CleanerBase,
+    CleanerCreate,
+    CleanerOut,
+    CleanerRefresh,
+    CleanerSignupRequest,
+    CleanerUpdate,
+)
+from schemas.imports import AccountStatus
 from security.hash import check_password
 from repositories.tokens_repo import get_refresh_tokens,delete_access_token,delete_refresh_token,delete_all_tokens_with_user_id
 from services.auth_helpers import issue_tokens_for_user
+from services.role_permission_template_service import get_effective_permission_list_for_role
 from authlib.integrations.starlette_client import OAuth
 import os
 from dotenv import load_dotenv
@@ -30,7 +39,18 @@ oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={'scope': 'openid email profile'},
 )
-async def add_user(user_data: CleanerCreate) -> CleanerOut:
+
+
+async def _build_cleaner_create_payload(user_data: CleanerSignupRequest) -> CleanerCreate:
+    permission_list = await get_effective_permission_list_for_role("cleaner")
+    return CleanerCreate(
+        **user_data.model_dump(),
+        accountStatus=AccountStatus.ACTIVE,
+        permissionList=permission_list,
+    )
+
+
+async def add_user(user_data: CleanerSignupRequest) -> CleanerOut:
     """adds an entry of CleanerCreate to the database and returns an object
 
     Returns:
@@ -38,7 +58,8 @@ async def add_user(user_data: CleanerCreate) -> CleanerOut:
     """
     cleaner =  await get_user(filter_dict={"email":user_data.email})
     if cleaner==None:
-        new_user= await create_user(user_data)
+        cleaner_create_payload = await _build_cleaner_create_payload(user_data=user_data)
+        new_user= await create_user(cleaner_create_payload)
         access_token, refresh_token = await issue_tokens_for_user(user_id=new_user.id, role="cleaner") # type: ignore
         new_user.password=""
         new_user.access_token= access_token
@@ -152,11 +173,12 @@ async def update_user_by_id(user_id: str, user_data: CleanerUpdate, is_password_
         QueueManager.get_instance().enqueue("delete_tokens", {"userId": user_id})
     return result
 
-async def authenticate_user_google(user_data: CleanerBase) -> CleanerOut:
+async def authenticate_user_google(user_data: CleanerSignupRequest) -> CleanerOut:
     cleaner = await get_user(filter_dict={"email": user_data.email})
 
     if cleaner is None:
-        new_user = await create_user(CleanerCreate(**user_data.model_dump()))
+        cleaner_create_payload = await _build_cleaner_create_payload(user_data=user_data)
+        new_user = await create_user(cleaner_create_payload)
         cleaner = new_user
 
     access_token, refresh_token = await issue_tokens_for_user(user_id=cleaner.id, role="cleaner") # type: ignore

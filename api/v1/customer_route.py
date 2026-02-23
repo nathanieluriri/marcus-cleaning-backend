@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from core.response_envelope import document_response
-from schemas.customer_schema import LoginType, CustomerBase, CustomerCreate, CustomerOut, CustomerRefresh
+from schemas.customer_schema import CustomerBase, CustomerOut, CustomerRefresh, CustomerSignupRequest, LoginType
 from services.customer_service import (
     add_user,
     authenticate_user,
@@ -40,7 +40,7 @@ async def auth_callback_user(request: Request):
 
     if user_info:
         print("✅ Google customer info:", user_info)
-        rider = CustomerBase(
+        rider = CustomerSignupRequest(
             firstName=user_info["name"],
             password="",
             lastName=user_info["given_name"],
@@ -87,9 +87,8 @@ async def get_my_users(customer: CustomerOut = Depends(check_user_account_status
     message="Customer created successfully",
     status_code=status.HTTP_201_CREATED,
 )
-async def signup_new_user(user_data: CustomerBase):
-    new_user = CustomerCreate(**user_data.model_dump())
-    items = await add_user(user_data=new_user)
+async def signup_new_user(user_data: CustomerSignupRequest):
+    items = await add_user(user_data=user_data)
     return items
 
 

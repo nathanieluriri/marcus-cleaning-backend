@@ -2,6 +2,18 @@ from schemas.imports import *
 from pydantic import Field
 import time
 from security.hash import hash_password
+
+
+class CustomerSignupRequest(BaseModel):
+    firstName: str
+    lastName: str
+    loginType: LoginType
+    email: EmailStr
+    password: str | bytes
+
+    model_config = {"extra": "forbid"}
+
+
 class CustomerBase(BaseModel):
     # Add other fields here 
     firstName:str

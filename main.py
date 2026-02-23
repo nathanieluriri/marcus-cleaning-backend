@@ -29,6 +29,7 @@ from core.response_envelope import (
     error_response,
     http_exception_response,
 )
+from core.validation_errors import format_validation_error_details
 from core.scheduler import scheduler
 from core.settings import get_settings
 from core.role_config import build_role_rate_limits, build_role_rate_limits_csv, normalize_role
@@ -181,7 +182,7 @@ async def custom_validation_exception_handler(request: Request, exc: RequestVali
     return error_response(
         status_code=422,
         message="Validation error",
-        data={"code": "VALIDATION_FAILED", "details": {"errors": exc.errors()}},
+        data={"code": "VALIDATION_FAILED", "details": format_validation_error_details(exc.errors())},
         request_id=getattr(request.state, "request_id", None),
     )
 

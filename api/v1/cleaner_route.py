@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from core.response_envelope import document_response
-from schemas.cleaner_schema import LoginType, CleanerBase, CleanerCreate, CleanerOut, CleanerRefresh
+from schemas.cleaner_schema import CleanerBase, CleanerOut, CleanerRefresh, CleanerSignupRequest, LoginType
 from services.cleaner_service import (
     add_user,
     authenticate_user,
@@ -40,7 +40,7 @@ async def auth_callback_user(request: Request):
 
     if user_info:
         print("✅ Google cleaner info:", user_info)
-        rider = CleanerBase(
+        rider = CleanerSignupRequest(
             firstName=user_info["name"],
             password="",
             lastName=user_info["given_name"],
@@ -87,9 +87,8 @@ async def get_my_users(cleaner: CleanerOut = Depends(check_user_account_status_a
     message="Cleaner created successfully",
     status_code=status.HTTP_201_CREATED,
 )
-async def signup_new_user(user_data: CleanerBase):
-    new_user = CleanerCreate(**user_data.model_dump())
-    items = await add_user(user_data=new_user)
+async def signup_new_user(user_data: CleanerSignupRequest):
+    items = await add_user(user_data=user_data)
     return items
 
 

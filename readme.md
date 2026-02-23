@@ -43,3 +43,13 @@ Use `document_response` helpers in routes:
 - `@document_created(...)`
 - `@document_deleted(...)`
 - `@document_paginated(...)`
+
+### Validation Error Details (422)
+
+Validation failures still return the standard envelope with `data.code = VALIDATION_FAILED`.
+For readability, `data.details` now includes:
+
+- `summary`: concise human-readable summary
+- `missingFields`: missing required fields (if any)
+- `fieldErrors`: normalized per-field errors (`path`, `location`, `message`, `errorType`)
+- `errors`: raw FastAPI/Pydantic errors (kept for backward compatibility)
