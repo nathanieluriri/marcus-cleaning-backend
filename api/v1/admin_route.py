@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, Request, status
 
 from core.response_envelope import document_response
 from schemas.admin_schema import AdminBase, AdminCreate, AdminLogin, AdminOut, AdminRefresh
@@ -15,6 +15,7 @@ from services.admin_service import (
     remove_admin,
     retrieve_admins,
 )
+from services.permission_catalog_service import build_permission_catalog_from_routes
 from services.role_permission_template_service import (
     get_role_permission_template_view,
     rollout_role_permission_template_for_role,
@@ -22,6 +23,61 @@ from services.role_permission_template_service import (
 )
 
 router = APIRouter(prefix="/admins", tags=["Admins"])
+
+PERMISSION_CATALOG_SUCCESS_EXAMPLE: dict[str, object] = {
+    "grouped": [
+        {
+            "resource": "customers",
+            "routes": [
+                {
+                    "resource": "customers",
+                    "method": "GET",
+                    "path": "/v1/customers/me",
+                    "normalized_path": "/customers/me",
+                    "key": "GET:/customers/me",
+                    "endpoint_name": "get_my_users",
+                    "summary": "Customer profile fetched successfully",
+                    "description": None,
+                    "requires_auth": True,
+                }
+            ],
+        },
+        {
+            "resource": "payments",
+            "routes": [
+                {
+                    "resource": "payments",
+                    "method": "POST",
+                    "path": "/v1/payments/intents",
+                    "normalized_path": "/payments/intents",
+                    "key": "POST:/payments/intents",
+                    "endpoint_name": "create_intent",
+                    "summary": "Payment intent created",
+                    "description": None,
+                    "requires_auth": True,
+                }
+            ],
+        },
+    ],
+    "flat": {
+        "permissions": [
+            {
+                "name": "get_my_users",
+                "methods": ["GET"],
+                "path": "/customers/me",
+                "key": "GET:/customers/me",
+                "description": "Customer profile fetched successfully",
+            },
+            {
+                "name": "create_intent",
+                "methods": ["POST"],
+                "path": "/payments/intents",
+                "key": "POST:/payments/intents",
+                "description": "Payment intent created",
+            },
+        ]
+    },
+}
 
 
 @router.get(
@@ -83,6 +139,19 @@ async def rollout_role_permission_template(
 ):
     _ = admin
     return await rollout_role_permission_template_for_role(role=role)
+
+
+@router.get("/permissions/catalog")
+@document_response(
+    message="Permission catalog fetched successfully",
+    success_example=PERMISSION_CATALOG_SUCCESS_EXAMPLE,
+)
+async def get_permissions_catalog(
+    request: Request,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    _ = admin
+    return build_permission_catalog_from_routes(request.app.routes)
 
 
 @router.post("/signup")

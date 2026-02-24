@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import requests
@@ -30,8 +31,9 @@ class FlutterwavePaymentProvider(PaymentProvider):
             "Content-Type": "application/json",
         }
 
-    def create_intent(self, payload: PaymentIntentRequest) -> PaymentIntentResponse:
-        response = requests.post(
+    async def create_intent(self, payload: PaymentIntentRequest) -> PaymentIntentResponse:
+        response = await asyncio.to_thread(
+            requests.post,
             f"{self._base_url}/payments",
             json={
                 "tx_ref": payload.reference,
@@ -62,7 +64,7 @@ class FlutterwavePaymentProvider(PaymentProvider):
             provider_payload=data,
         )
 
-    def verify_webhook(self, *, body: bytes, headers: dict[str, str]) -> WebhookEvent:
+    async def verify_webhook(self, *, body: bytes, headers: dict[str, str]) -> WebhookEvent:
         provided = headers.get("verif-hash") or headers.get("Verif-Hash")
         expected = self._webhook_secret_hash
         if expected and provided != expected:
@@ -82,8 +84,9 @@ class FlutterwavePaymentProvider(PaymentProvider):
             payload=payload,
         )
 
-    def fetch_transaction(self, *, reference: str) -> PaymentTransaction:
-        response = requests.get(
+    async def fetch_transaction(self, *, reference: str) -> PaymentTransaction:
+        response = await asyncio.to_thread(
+            requests.get,
             f"{self._base_url}/transactions/verify_by_reference",
             params={"tx_ref": reference},
             headers=self._headers(),
@@ -107,8 +110,8 @@ class FlutterwavePaymentProvider(PaymentProvider):
             raw=data,
         )
 
-    def refund(self, *, reference: str, amount_minor: int | None = None) -> PaymentTransaction:
-        tx = self.fetch_transaction(reference=reference)
+    async def refund(self, *, reference: str, amount_minor: int | None = None) -> PaymentTransaction:
+        tx = await self.fetch_transaction(reference=reference)
         transaction_id = tx.raw.get("data", {}).get("id")
         if not transaction_id:
             raise AppException(
@@ -122,7 +125,8 @@ class FlutterwavePaymentProvider(PaymentProvider):
         if amount_minor is not None:
             payload["amount"] = amount_minor / 100
 
-        response = requests.post(
+        response = await asyncio.to_thread(
+            requests.post,
             f"{self._base_url}/transactions/{transaction_id}/refund",
             json=payload,
             headers=self._headers(),

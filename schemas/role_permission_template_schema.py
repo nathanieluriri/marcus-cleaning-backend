@@ -36,3 +36,25 @@ class RolePermissionRolloutOut(BaseModel):
     source: Literal["template", "default"]
     matched_count: int
     modified_count: int
+
+
+class PermissionCatalogRouteItem(BaseModel):
+    resource: str
+    method: str
+    path: str
+    normalized_path: str
+    key: str
+    endpoint_name: str
+    summary: str | None = None
+    description: str | None = None
+    requires_auth: bool
+
+
+class PermissionCatalogGroup(BaseModel):
+    resource: str
+    routes: list[PermissionCatalogRouteItem]
+
+
+class PermissionCatalogOut(BaseModel):
+    grouped: list[PermissionCatalogGroup]
+    flat: PermissionList

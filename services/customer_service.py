@@ -11,14 +11,14 @@ from repositories.customer_repo import (
     delete_user,
 )
 from schemas.customer_schema import (
-    CustomerBase,
     CustomerCreate,
+    CustomerLogin,
     CustomerOut,
     CustomerRefresh,
     CustomerSignupRequest,
     CustomerUpdate,
 )
-from schemas.imports import AccountStatus
+from schemas.imports import AccountStatus, LoginType
 from security.hash import check_password
 from repositories.tokens_repo import get_refresh_tokens,delete_access_token,delete_refresh_token,delete_all_tokens_with_user_id
 from services.auth_helpers import issue_tokens_for_user
@@ -41,10 +41,13 @@ oauth.register(
 )
 
 
-async def _build_customer_create_payload(user_data: CustomerSignupRequest) -> CustomerCreate:
+async def _build_customer_create_payload(
+    user_data: CustomerSignupRequest, login_type: LoginType
+) -> CustomerCreate:
     permission_list = await get_effective_permission_list_for_role("customer")
     return CustomerCreate(
         **user_data.model_dump(),
+        loginType=login_type,
         accountStatus=AccountStatus.ACTIVE,
         permissionList=permission_list,
     )
@@ -58,7 +61,10 @@ async def add_user(user_data: CustomerSignupRequest) -> CustomerOut:
     """
     customer =  await get_user(filter_dict={"email":user_data.email})
     if customer==None:
-        customer_create_payload = await _build_customer_create_payload(user_data=user_data)
+        customer_create_payload = await _build_customer_create_payload(
+            user_data=user_data,
+            login_type=LoginType.email,
+        )
         new_user= await create_user(customer_create_payload)
         access_token, refresh_token = await issue_tokens_for_user(user_id=new_user.id, role="customer") # type: ignore
         new_user.password=""
@@ -68,7 +74,7 @@ async def add_user(user_data: CustomerSignupRequest) -> CustomerOut:
     else:
         raise HTTPException(status_code=409,detail="Customer Already exists")
 
-async def authenticate_user(user_data:CustomerBase )->CustomerOut:
+async def authenticate_user(user_data: CustomerLogin) -> CustomerOut:
     customer = await get_user(filter_dict={"email":user_data.email})
 
     if customer != None:
@@ -177,7 +183,10 @@ async def authenticate_user_google(user_data: CustomerSignupRequest) -> Customer
     customer = await get_user(filter_dict={"email": user_data.email})
 
     if customer is None:
-        customer_create_payload = await _build_customer_create_payload(user_data=user_data)
+        customer_create_payload = await _build_customer_create_payload(
+            user_data=user_data,
+            login_type=LoginType.google,
+        )
         new_user = await create_user(customer_create_payload)
         customer = new_user
 
@@ -186,4 +195,3 @@ async def authenticate_user_google(user_data: CustomerSignupRequest) -> Customer
     customer.access_token = access_token
     customer.refresh_token = refresh_token
     return customer
-

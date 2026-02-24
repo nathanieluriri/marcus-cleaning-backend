@@ -62,7 +62,7 @@ def auth_permission_denied(permission_key: str) -> AppException:
         status_code=status.HTTP_403_FORBIDDEN,
         code=ErrorCode.AUTH_PERMISSION_DENIED,
         message="Insufficient permissions",
-        details={"permission_key": permission_key},
+        details={"reason": f"You do not have permission to perform actions on this route ({permission_key})." },
     )
 
 

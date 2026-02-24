@@ -11,14 +11,14 @@ from repositories.cleaner_repo import (
     delete_user,
 )
 from schemas.cleaner_schema import (
-    CleanerBase,
     CleanerCreate,
+    CleanerLogin,
     CleanerOut,
     CleanerRefresh,
     CleanerSignupRequest,
     CleanerUpdate,
 )
-from schemas.imports import AccountStatus
+from schemas.imports import AccountStatus, LoginType
 from security.hash import check_password
 from repositories.tokens_repo import get_refresh_tokens,delete_access_token,delete_refresh_token,delete_all_tokens_with_user_id
 from services.auth_helpers import issue_tokens_for_user
@@ -59,6 +59,7 @@ async def add_user(user_data: CleanerSignupRequest) -> CleanerOut:
     cleaner =  await get_user(filter_dict={"email":user_data.email})
     if cleaner==None:
         cleaner_create_payload = await _build_cleaner_create_payload(user_data=user_data)
+        cleaner_create_payload.loginType=LoginType.email
         new_user= await create_user(cleaner_create_payload)
         access_token, refresh_token = await issue_tokens_for_user(user_id=new_user.id, role="cleaner") # type: ignore
         new_user.password=""
@@ -68,7 +69,7 @@ async def add_user(user_data: CleanerSignupRequest) -> CleanerOut:
     else:
         raise HTTPException(status_code=409,detail="Cleaner Already exists")
 
-async def authenticate_user(user_data:CleanerBase )->CleanerOut:
+async def authenticate_user(user_data: CleanerLogin) -> CleanerOut:
     cleaner = await get_user(filter_dict={"email":user_data.email})
 
     if cleaner != None:
@@ -178,6 +179,7 @@ async def authenticate_user_google(user_data: CleanerSignupRequest) -> CleanerOu
 
     if cleaner is None:
         cleaner_create_payload = await _build_cleaner_create_payload(user_data=user_data)
+        cleaner_create_payload.loginType=LoginType.google
         new_user = await create_user(cleaner_create_payload)
         cleaner = new_user
 
@@ -186,4 +188,3 @@ async def authenticate_user_google(user_data: CleanerSignupRequest) -> CleanerOu
     cleaner.access_token = access_token
     cleaner.refresh_token = refresh_token
     return cleaner
-

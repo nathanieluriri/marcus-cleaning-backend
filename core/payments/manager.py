@@ -5,6 +5,7 @@ from threading import Lock
 from core.payments.flutterwave_provider import FlutterwavePaymentProvider
 from core.payments.provider import PaymentProvider
 from core.payments.stripe_provider import StripePaymentProvider
+from core.payments.test_environment_provider import FakePaymentProvider
 from core.settings import get_settings
 
 
@@ -33,10 +34,16 @@ class PaymentManager:
                 webhook_secret=settings.stripe_webhook_secret,
             )
 
+        if settings.test_payment_base_url:
+            providers["test"] = FakePaymentProvider(
+                base_url=settings.test_payment_base_url,
+                webhook_secret_hash=settings.test_payment_webhook_secret_hash,
+            )
+
         if not providers:
             raise RuntimeError(
                 "At least one payment provider must be configured. "
-                "Set FLUTTERWAVE_SECRET_KEY and/or STRIPE_SECRET_KEY."
+                "Set FLUTTERWAVE_SECRET_KEY, STRIPE_SECRET_KEY, and/or TEST_PAYMENT_BASE_URL."
             )
 
         default_provider = settings.payment_default_provider

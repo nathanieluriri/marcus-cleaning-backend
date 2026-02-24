@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Template</title>
+    
+    <!-- Stripe's preferred typeface style -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Configuration for Stripe-like theme -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                    colors: {
+                        stripe: {
+                            bg: '#F6F9FC',
+                            primary: '#635BFF',
+                            primaryHover: '#0A2540',
+                            textDark: '#1D1D1F',
+                            textMuted: '#425466',
+                            border: '#E6E8EB',
+                            panel: '#F9FAFB'
+                        }
+                    },
+                    boxShadow: {
+                        'stripe': '0 15px 35px rgba(50,50,93,0.1), 0 5px 15px rgba(0,0,0,0.07)',
+                        'input': '0 1px 3px rgba(50,50,93,0.05), 0 1px 0 rgba(0,0,0,0.02)'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Minimal custom CSS kept strictly for SVG animations and absolute positioning */
+        .loader {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            width: 1.25rem;
+            height: 1.25rem;
+            animation: spin 1s linear infinite;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s;
+        }
+
+        .btn-loading .btn-text {
+            opacity: 0;
+        }
+
+        .btn-loading .loader {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        @keyframes spin {
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
+        /* Success SVG Animation */
+        .success-ring {
+            stroke-dasharray: 151px;
+            stroke-dashoffset: 151px;
+        }
+        .success-check {
+            stroke-dasharray: 36px;
+            stroke-dashoffset: 36px;
+        }
+        
+        .show-success .success-ring {
+            animation: drawRing 0.6s ease forwards;
+        }
+        .show-success .success-check {
+            animation: drawCheck 0.4s 0.4s ease forwards;
+        }
+
+        @keyframes drawRing { to { stroke-dashoffset: 0; } }
+        @keyframes drawCheck { to { stroke-dashoffset: 0; } }
+    </style>
+</head>
+<body class="bg-stripe-bg text-stripe-textDark font-sans antialiased min-h-screen flex items-center justify-center p-4 sm:p-6 lg:p-8">
+
+    <!-- Main Checkout Container -->
+    <main class="w-full max-w-4xl bg-white rounded-xl shadow-stripe flex flex-col md:flex-row overflow-hidden relative min-h-[500px]">
+        
+        <!-- Left Column: Summary -->
+        <section class="w-full md:w-[45%] bg-stripe-panel p-8 md:p-10 flex flex-col justify-between border-b md:border-b-0 md:border-r border-stripe-border relative z-10 transition-opacity duration-300" id="summaryPanel">
+            <div>
+                <!-- Brand / Logo Area -->
+                <div class="flex items-center gap-2 mb-10 text-stripe-textMuted font-medium text-sm">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    Test Environment
+                </div>
+
+                <p class="text-sm font-medium text-stripe-textMuted mb-1">Pay {{ payment.title }}</p>
+                <h1 class="text-4xl font-semibold tracking-tight text-stripe-textDark mb-4">
+                    {{ payment.currency }} {{ payment.formatted_amount }}
+                </h1>
+                
+                <p class="text-stripe-textMuted text-sm leading-relaxed mb-8">
+                    {{ payment.description }}
+                </p>
+
+                <!-- Key-Value Meta Data -->
+                <div class="space-y-4 text-sm border-t border-stripe-border pt-6">
+                    <div class="flex justify-between items-center">
+                        <span class="text-stripe-textMuted">Reference</span>
+                        <span class="font-medium text-stripe-textDark">{{ payment.reference }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-stripe-textMuted">Plan</span>
+                        <span class="font-medium text-stripe-textDark">{{ payment.billing_period }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-stripe-textMuted">Service Window</span>
+                        <span class="font-medium text-stripe-textDark">{{ payment.service_date }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Note -->
+            <div class="mt-12 text-xs text-stripe-textMuted flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                Powered by secure checkout template
+            </div>
+        </section>
+
+        <!-- Right Column: Payment Form -->
+        <section class="w-full md:w-[55%] p-8 md:p-10 bg-white relative z-10 transition-opacity duration-300 flex flex-col justify-center" id="paymentPanel">
+            
+            <h2 class="text-xl font-semibold mb-6">Payment details</h2>
+            
+            <!-- Mock Form Fields to look professional -->
+            <div class="space-y-5">
+                <!-- Email -->
+                <div>
+                    <label class="block text-sm font-medium text-stripe-textDark mb-1.5">Email</label>
+                    <input type="email" value="customer@example.com" disabled class="w-full px-3 py-2.5 bg-white border border-gray-300 rounded-md shadow-input text-sm text-gray-500 focus:outline-none cursor-not-allowed" />
+                </div>
+
+                <!-- Card Info -->
+                <div>
+                    <label class="block text-sm font-medium text-stripe-textDark mb-1.5">Card Information</label>
+                    <div class="w-full border border-gray-300 rounded-md shadow-input bg-white overflow-hidden flex flex-col">
+                        <div class="px-3 py-2.5 border-b border-gray-200 flex items-center gap-2 text-gray-400">
+                            <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+                            <span class="text-sm font-mono tracking-widest text-gray-400 flex-1">•••• •••• •••• 4242</span>
+                        </div>
+                        <div class="flex">
+                            <div class="w-1/2 px-3 py-2.5 border-r border-gray-200 text-sm font-mono text-gray-400">
+                                12 / 24
+                            </div>
+                            <div class="w-1/2 px-3 py-2.5 text-sm font-mono text-gray-400">
+                                CVC
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Note -->
+                <p class="text-xs text-stripe-textMuted pt-2">
+                    This is a demonstration template. No actual card inputs are processed.
+                </p>
+
+                <!-- Pay Button -->
+                <button type="button" id="payButton" class="w-full mt-4 bg-stripe-primary hover:bg-stripe-primaryHover text-white font-medium py-3 px-4 rounded-md shadow-sm transition-all duration-200 relative min-h-[3rem] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-stripe-primary">
+                    <span class="btn-text transition-opacity duration-200">Pay {{ payment.currency }} {{ payment.formatted_amount }}</span>
+                    <div class="loader"></div>
+                </button>
+            </div>
+        </section>
+
+        <!-- Success Overlay (Hidden by default, covers right panel on desktop or whole card based on design, here it covers whole card) -->
+        <section id="successOverlay" class="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 text-center opacity-0 pointer-events-none transition-opacity duration-500">
+            <div class="w-16 h-16 mb-6">
+                <svg viewBox="0 0 52 52" focusable="false" class="w-full h-full">
+                    <circle class="success-ring" cx="26" cy="26" r="24" fill="none" stroke="#10B981" stroke-width="3"></circle>
+                    <path class="success-check" d="M15 27 l8 8 l14 -16" fill="none" stroke="#10B981" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+            </div>
+            <h2 class="text-2xl font-semibold text-stripe-textDark mb-2">Payment successful</h2>
+            <p class="text-stripe-textMuted mb-6 text-sm">Your test payment was confirmed.</p>
+            
+            <div class="bg-stripe-bg rounded-lg p-4 w-full max-w-sm border border-stripe-border">
+                <div class="flex justify-between text-sm mb-2">
+                    <span class="text-stripe-textMuted">Amount paid</span>
+                    <span class="font-medium text-stripe-textDark">{{ payment.currency }} {{ payment.formatted_amount }}</span>
+                </div>
+                <div class="flex justify-between text-sm">
+                    <span class="text-stripe-textMuted">Reference</span>
+                    <span class="font-mono text-xs text-stripe-textDark bg-white px-2 py-1 rounded border border-gray-200">{{ payment.reference }}</span>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const payButton = document.getElementById('payButton');
+            const summaryPanel = document.getElementById('summaryPanel');
+            const paymentPanel = document.getElementById('paymentPanel');
+            const successOverlay = document.getElementById('successOverlay');
+
+            payButton.addEventListener('click', () => {
+                // 1. Enter Loading State
+                payButton.classList.add('btn-loading');
+                payButton.disabled = true;
+
+                // Simulate network request
+                setTimeout(() => {
+                    // 2. Fade out main panels
+                    summaryPanel.classList.add('opacity-0');
+                    paymentPanel.classList.add('opacity-0');
+                    
+                    setTimeout(() => {
+                        // 3. Fade in success overlay and trigger SVG animation
+                        successOverlay.classList.remove('opacity-0', 'pointer-events-none');
+                        successOverlay.classList.add('show-success');
+                        
+                    }, 300); // Wait for panels to fade out
+
+                }, 2000); // 2 seconds delay
+            });
+        });
+    </script>
+</body>
+</html>

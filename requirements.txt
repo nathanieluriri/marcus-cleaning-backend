@@ -4,7 +4,9 @@ pyjwt
 dotenv==0.9.9
 uvicorn
 python-dotenv
+pytest
 pydantic
+pytest-asyncio
 boto3
 stripe
 redis

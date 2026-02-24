@@ -8,6 +8,7 @@ from typing import Any
 class PaymentProviderName(str, Enum):
     STRIPE = "stripe"
     FLUTTERWAVE = "flutterwave"
+    TEST="test"
 
 
 class PaymentStatus(str, Enum):

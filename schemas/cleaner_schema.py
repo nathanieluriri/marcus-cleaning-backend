@@ -1,5 +1,5 @@
 from schemas.imports import *
-from pydantic import Field
+from pydantic import ConfigDict, Field
 import time
 from security.hash import hash_password
 
@@ -7,7 +7,6 @@ from security.hash import hash_password
 class CleanerSignupRequest(BaseModel):
     firstName: str
     lastName: str
-    loginType: LoginType
     email: EmailStr
     password: str | bytes
 
@@ -18,12 +17,20 @@ class CleanerBase(BaseModel):
     # Add other fields here 
     firstName:str
     lastName:str
-    loginType:LoginType
+    loginType:Optional[LoginType]=None
     email:EmailStr
     password:str | bytes
     accountStatus: AccountStatus = AccountStatus.ACTIVE
     permissionList: Optional[PermissionList] = None
     pass
+
+
+class CleanerLogin(BaseModel):
+    email: EmailStr
+    password: str | bytes
+
+    model_config = {"extra": "forbid"}
+
 
 class CleanerRefresh(BaseModel):
     # Add other fields here 
@@ -57,9 +64,8 @@ class CleanerOut(CleanerBase):
             values["_id"] = str(values["_id"])  # coerce to string before validation
         return values
             
-    class Config:
-        populate_by_name = True  # allows using `id` when constructing the model
-        arbitrary_types_allowed = True  # allows ObjectId type
-        json_encoders = {
-            ObjectId: str  # automatically converts ObjectId → str
-        }
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str},
+    )

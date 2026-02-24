@@ -1,5 +1,5 @@
 from schemas.imports import *
-from pydantic import Field
+from pydantic import ConfigDict, Field
 import time
 from security.hash import hash_password
 from typing import List, Optional
@@ -58,9 +58,8 @@ class AdminOut(AdminBase):
             values["_id"] = str(values["_id"])  # coerce to string before validation
         return values
             
-    class Config:
-        populate_by_name = True  # allows using `id` when constructing the model
-        arbitrary_types_allowed = True  # allows ObjectId type
-        json_encoders = {
-            ObjectId: str  # automatically converts ObjectId → str
-        }
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str},
+    )

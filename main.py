@@ -6,12 +6,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 import redis
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from limits import parse
 from limits.storage import RedisStorage
 from limits.strategies import FixedWindowRateLimiter
@@ -37,6 +39,7 @@ from core.storage.manager import DocumentStorageManager
 from repositories.tokens_repo import get_access_token_allow_expired
 
 settings = get_settings()
+BASE_DIR = Path(__file__).resolve().parent
 
 MONGO_URI = os.getenv("MONGO_URL")
 mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000) if MONGO_URI else None
@@ -170,6 +173,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
 @app.exception_handler(HTTPException)
@@ -280,12 +284,16 @@ from api.v1.cleaner_route import router as v1_cleaner_route_router
 from api.v1.customer_route import router as v1_customer_route_router
 from api.v1.documents_route import router as v1_documents_route_router
 from api.v1.payments_route import router as v1_payments_route_router
+from api.v1.place_route import router as v1_place_route_router
+from api.web.payment_template_route import router as web_payment_template_router
 
 app.include_router(v1_admin_route_router, prefix='/v1')
 app.include_router(v1_cleaner_route_router, prefix='/v1')
 app.include_router(v1_customer_route_router, prefix='/v1')
 app.include_router(v1_documents_route_router, prefix='/v1')
 app.include_router(v1_payments_route_router, prefix='/v1')
+app.include_router(v1_place_route_router, prefix='/v1')
+app.include_router(web_payment_template_router)
 # --- auto-routes-end ---
 
 apply_response_documentation(app)

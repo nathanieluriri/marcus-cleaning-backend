@@ -36,6 +36,7 @@ async def payment_webhook(provider: str, request: Request):
     Accepted `provider` path values:
     - `stripe`
     - `flutterwave`
+    - `test`
     """
     body = await request.body()
     headers = {k: v for k, v in request.headers.items()}

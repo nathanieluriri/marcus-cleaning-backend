@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from schemas.imports import ObjectId
 
@@ -64,5 +64,4 @@ class DocumentOut(BaseModel):
             values["_id"] = str(values["_id"])
         return values
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)

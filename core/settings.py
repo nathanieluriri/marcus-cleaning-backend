@@ -30,6 +30,8 @@ class Settings:
     flutterwave_secret_key: str | None
     flutterwave_public_key: str | None
     flutterwave_webhook_secret_hash: str | None
+    test_payment_base_url: str | None
+    test_payment_webhook_secret_hash: str | None
 
     @property
     def is_production(self) -> bool:
@@ -67,6 +69,8 @@ def get_settings() -> Settings:
         flutterwave_secret_key=os.getenv("FLUTTERWAVE_SECRET_KEY"),
         flutterwave_public_key=os.getenv("FLUTTERWAVE_PUBLIC_KEY"),
         flutterwave_webhook_secret_hash=os.getenv("FLW_WEBHOOK_SECRET_HASH"),
+        test_payment_base_url=os.getenv("TEST_PAYMENT_BASE_URL"),
+        test_payment_webhook_secret_hash=os.getenv("TEST_PAYMENT_WEBHOOK_SECRET_HASH"),
     )
 
     if settings.is_production:

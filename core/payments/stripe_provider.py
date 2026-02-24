@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from core.errors import AppException, ErrorCode
@@ -27,9 +28,10 @@ class StripePaymentProvider(PaymentProvider):
         self._stripe.api_key = secret_key
         self._webhook_secret = webhook_secret
 
-    def create_intent(self, payload: PaymentIntentRequest) -> PaymentIntentResponse:
+    async def create_intent(self, payload: PaymentIntentRequest) -> PaymentIntentResponse:
         try:
-            intent = self._stripe.PaymentIntent.create(
+            intent = await asyncio.to_thread(
+                self._stripe.PaymentIntent.create,
                 amount=payload.amount_minor,
                 currency=payload.currency.lower(),
                 metadata={"reference": payload.reference, **(payload.metadata or {})},
@@ -52,7 +54,7 @@ class StripePaymentProvider(PaymentProvider):
             provider_payload={"client_secret": intent.client_secret, "id": intent.id},
         )
 
-    def verify_webhook(self, *, body: bytes, headers: dict[str, str]) -> WebhookEvent:
+    async def verify_webhook(self, *, body: bytes, headers: dict[str, str]) -> WebhookEvent:
         signature = headers.get("stripe-signature") or headers.get("Stripe-Signature")
         if not signature or not self._webhook_secret:
             raise AppException(
@@ -62,7 +64,8 @@ class StripePaymentProvider(PaymentProvider):
             )
 
         try:
-            event = self._stripe.Webhook.construct_event(
+            event = await asyncio.to_thread(
+                self._stripe.Webhook.construct_event,
                 payload=body,
                 sig_header=signature,
                 secret=self._webhook_secret,
@@ -82,8 +85,12 @@ class StripePaymentProvider(PaymentProvider):
             payload=json.loads(json.dumps(event, default=str)),
         )
 
-    def fetch_transaction(self, *, reference: str) -> PaymentTransaction:
-        intents = self._stripe.PaymentIntent.search(query=f"metadata['reference']:'{reference}'", limit=1)
+    async def fetch_transaction(self, *, reference: str) -> PaymentTransaction:
+        intents = await asyncio.to_thread(
+            self._stripe.PaymentIntent.search,
+            query=f"metadata['reference']:'{reference}'",
+            limit=1,
+        )
         if not intents.data:
             raise AppException(
                 status_code=404,
@@ -101,8 +108,8 @@ class StripePaymentProvider(PaymentProvider):
             raw=json.loads(json.dumps(intent, default=str)),
         )
 
-    def refund(self, *, reference: str, amount_minor: int | None = None) -> PaymentTransaction:
-        tx = self.fetch_transaction(reference=reference)
+    async def refund(self, *, reference: str, amount_minor: int | None = None) -> PaymentTransaction:
+        tx = await self.fetch_transaction(reference=reference)
         payment_intent_id = tx.raw.get("id")
         if not payment_intent_id:
             raise AppException(
@@ -116,7 +123,7 @@ class StripePaymentProvider(PaymentProvider):
         if amount_minor is not None:
             refund_payload["amount"] = amount_minor
 
-        refund = self._stripe.Refund.create(**refund_payload)
+        refund = await asyncio.to_thread(self._stripe.Refund.create, **refund_payload)
         return PaymentTransaction(
             provider=PaymentProviderName.STRIPE,
             reference=reference,

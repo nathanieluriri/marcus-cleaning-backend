@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from core.response_envelope import document_response
-from schemas.customer_schema import CustomerBase, CustomerOut, CustomerRefresh, CustomerSignupRequest, LoginType
+from schemas.customer_schema import CustomerLogin, CustomerOut, CustomerRefresh, CustomerSignupRequest
 from services.customer_service import (
     add_user,
     authenticate_user,
@@ -45,7 +45,6 @@ async def auth_callback_user(request: Request):
             password="",
             lastName=user_info["given_name"],
             email=user_info["email"],
-            loginType=LoginType.google,
         )
         data = await authenticate_user_google(user_data=rider)
         access_token = data.access_token
@@ -94,7 +93,7 @@ async def signup_new_user(user_data: CustomerSignupRequest):
 
 @router.post("/login")
 @document_response(message="Login successful")
-async def login_user(user_data: CustomerBase):
+async def login_user(user_data: CustomerLogin):
     items = await authenticate_user(user_data=user_data)
     return items
 

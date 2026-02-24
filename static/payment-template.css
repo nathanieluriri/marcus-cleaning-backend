@@ -1,0 +1,307 @@
+:root {
+    --bg-a: #edf4ff;
+    --bg-b: #f9fbff;
+    --card: #ffffff;
+    --card-shadow: 0 24px 60px rgba(22, 49, 92, 0.16);
+    --text-main: #15213a;
+    --text-muted: #5e6c87;
+    --line: #dfe7f4;
+    --accent: #1a73ff;
+    --accent-strong: #0454d5;
+    --success: #0f9d68;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Manrope", "Segoe UI", sans-serif;
+    color: var(--text-main);
+    background:
+        radial-gradient(120% 120% at 10% 10%, #d2e5ff 0%, transparent 42%),
+        radial-gradient(140% 120% at 90% 100%, #d7ffe8 0%, transparent 38%),
+        linear-gradient(160deg, var(--bg-a), var(--bg-b));
+}
+
+.checkout-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 2rem 1rem;
+}
+
+.checkout-card {
+    position: relative;
+    width: min(930px, 100%);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    border-radius: 28px;
+    padding: 1.4rem;
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.9), rgba(247, 251, 255, 0.94));
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
+    transform: translateY(12px);
+    opacity: 0;
+    animation: enter 0.7s ease forwards;
+}
+
+.card-backdrop {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(600px 260px at 95% -10%, rgba(26, 115, 255, 0.14), transparent 56%);
+}
+
+.checkout-header {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    padding: 0.6rem 0.8rem 1.1rem;
+}
+
+.eyebrow {
+    margin: 0;
+    color: var(--accent-strong);
+    font-size: 0.82rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+h1,
+h2 {
+    margin: 0;
+    font-family: "Fraunces", Georgia, serif;
+    letter-spacing: -0.02em;
+}
+
+h1 {
+    margin-top: 0.35rem;
+    font-size: clamp(1.7rem, 2.6vw, 2.2rem);
+}
+
+.chip {
+    border: 1px solid rgba(4, 84, 213, 0.22);
+    border-radius: 999px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    background: rgba(26, 115, 255, 0.08);
+}
+
+.summary-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 1rem;
+}
+
+.service-panel,
+.amount-panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 1.1rem 1.2rem;
+}
+
+.service-description {
+    margin: 0.7rem 0 1.1rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+}
+
+.service-meta {
+    margin: 0;
+    display: grid;
+    gap: 0.85rem;
+}
+
+.service-meta div {
+    padding-top: 0.8rem;
+    border-top: 1px dashed var(--line);
+}
+
+.service-meta dt {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6f7f9c;
+}
+
+.service-meta dd {
+    margin: 0.35rem 0 0;
+    font-size: 0.96rem;
+    color: var(--text-main);
+}
+
+.amount-panel {
+    display: grid;
+    align-content: start;
+    gap: 0.6rem;
+}
+
+.amount-label {
+    margin: 0;
+    color: #607190;
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.amount-value {
+    margin: 0;
+    font-family: "Fraunces", Georgia, serif;
+    font-size: clamp(1.8rem, 4vw, 2.4rem);
+}
+
+.amount-note {
+    margin: 0;
+    color: #687896;
+    font-size: 0.9rem;
+}
+
+.pay-button {
+    margin-top: 0.6rem;
+    border: 0;
+    border-radius: 14px;
+    background: linear-gradient(130deg, var(--accent), var(--accent-strong));
+    color: #ffffff;
+    min-height: 52px;
+    padding: 0.75rem 1.05rem;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    box-shadow: 0 16px 30px rgba(4, 84, 213, 0.24);
+    position: relative;
+    overflow: hidden;
+}
+
+.pay-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 20px 32px rgba(4, 84, 213, 0.28);
+}
+
+.pay-button:focus-visible {
+    outline: 3px solid rgba(4, 84, 213, 0.35);
+    outline-offset: 2px;
+}
+
+.button-loader {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.45);
+    border-top-color: #ffffff;
+    animation: spin 0.85s linear infinite;
+    display: none;
+    margin-inline: auto;
+}
+
+.is-processing .button-text {
+    display: none;
+}
+
+.is-processing .button-loader {
+    display: block;
+}
+
+.success-panel {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    background: linear-gradient(165deg, rgba(255, 255, 255, 0.95), rgba(240, 255, 249, 0.96));
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.96);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+    padding: 2rem 1rem;
+}
+
+.success-panel p {
+    margin: 0.42rem 0 0;
+    color: #46617a;
+}
+
+.success-reference {
+    font-size: 0.84rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.success-icon {
+    width: 62px;
+    height: 62px;
+    margin-bottom: 0.45rem;
+}
+
+.success-icon svg {
+    width: 100%;
+    height: 100%;
+}
+
+.success-ring,
+.success-check {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.success-ring {
+    stroke: rgba(15, 157, 104, 0.35);
+    stroke-width: 2.5;
+}
+
+.success-check {
+    stroke: var(--success);
+    stroke-width: 3.8;
+    stroke-dasharray: 42;
+    stroke-dashoffset: 42;
+    transition: stroke-dashoffset 0.35s ease 0.2s;
+}
+
+.checkout-card.is-success .success-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1);
+}
+
+.checkout-card.is-success .success-check {
+    stroke-dashoffset: 0;
+}
+
+@media (max-width: 800px) {
+    .summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .checkout-card {
+        border-radius: 22px;
+    }
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes enter {
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+

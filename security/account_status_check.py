@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from importlib import import_module
+from typing import Final
 
 from fastapi import Depends, Request, status
 
@@ -10,6 +12,20 @@ from security.auth import verify_admin_token, verify_any_token, verify_cleaner_t
 from security.permissions import make_permission_key
 from security.principal import AuthPrincipal
 from services.admin_service import retrieve_admin_by_admin_id
+
+SUPER_ADMIN_STATIC_ID: Final[str] = "656f7ac12b9d4f6c9e2b9f7d"
+SUPER_ADMIN_EMAIL: Final[str] = (os.getenv("SUPER_ADMIN_EMAIL") or "").strip().lower()
+
+
+def _is_super_admin_account(*, admin_id: str | None, admin_email: str | None) -> bool:
+    normalized_id = (admin_id or "").strip()
+    normalized_email = (admin_email or "").strip().lower()
+
+    if normalized_id and normalized_id == SUPER_ADMIN_STATIC_ID:
+        return True
+    if SUPER_ADMIN_EMAIL and normalized_email and normalized_email == SUPER_ADMIN_EMAIL:
+        return True
+    return False
 
 
 def _validate_permission_list(permission_list: PermissionList | None) -> None:
@@ -56,6 +72,10 @@ def _build_permission_context(request: Request) -> tuple[str, str, str]:
     request_method = request.method.upper()
     route = request.scope.get("route")
     route_path = getattr(route, "path", request.url.path)
+    # Remove API version prefix
+    if route_path.startswith("/v1"):
+        route_path = route_path[3:]
+    
     permission_key = make_permission_key(method=request_method, path=route_path)
     return endpoint_name, request_method, permission_key
 
@@ -66,8 +86,9 @@ async def _check_non_admin_account_status_and_permissions(
     principal: AuthPrincipal,
     role: str,
 ):
+   
     module = import_module(f"services.{role}_service")
-    fetcher = getattr(module, f"retrieve_{role}_by_{role}_id", None)
+    fetcher = getattr(module, f"retrieve_user_by_user_id", None)
     if fetcher is None:
         raise AppException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -124,6 +145,12 @@ async def check_admin_account_status_and_permissions(
             code=ErrorCode.AUTH_ACCOUNT_INACTIVE,
             message="Admin account is not active",
         )
+
+    if _is_super_admin_account(
+        admin_id=getattr(admin, "id", None),
+        admin_email=getattr(admin, "email", None),
+    ):
+        return admin
 
     endpoint_name, request_method, permission_key = _build_permission_context(request)
     permission_list = getattr(admin, "permissionList", None)
