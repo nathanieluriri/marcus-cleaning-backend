@@ -10,6 +10,7 @@ class AuthPrincipal(BaseModel):
     role: Literal['cleaner', 'customer', 'admin']
     access_token_id: str
     jwt_token: str
+    token_created_at: int | None = None
     allow_expired: bool = False
 
     @property

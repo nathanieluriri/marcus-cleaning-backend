@@ -52,9 +52,10 @@ async def get_users(filter_dict: dict = {},start=0,stop=100) -> List[CleanerOut]
             detail=f"An error occurred while fetching cleaners: {str(e)}"
         )
 async def update_user(filter_dict: dict, user_data: CleanerUpdate) -> CleanerOut:
+    update_payload = user_data.model_dump(exclude_unset=True, mode="json")
     result = await db.cleaners.find_one_and_update(
         filter_dict,
-        {"$set": user_data.model_dump()},
+        {"$set": update_payload},
         return_document=ReturnDocument.AFTER
     )
     returnable_result = CleanerOut(**result)

@@ -6,8 +6,8 @@ from core.response_envelope import document_response
 from core.settings import get_settings
 from schemas.booking import BookingBase, BookingOut
 from schemas.imports import BookingStatus
-from security.auth import verify_any_token
 from security.booking_access_check import (
+    require_booking_principal,
     require_booking_visibility,
     require_cleaner_principal,
     require_customer_principal,
@@ -39,7 +39,7 @@ async def list_bookings(
     start: int = Query(default=0, ge=0),
     stop: int = Query(default=100, gt=0, le=200),
     status_filter: BookingStatus | None = Query(default=None, alias="status"),
-    principal: AuthPrincipal = Depends(verify_any_token),
+    principal: AuthPrincipal = Depends(require_booking_principal),
 ):
     return await retrieve_bookings_for_principal(
         principal=principal,

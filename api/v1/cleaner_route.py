@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from core.response_envelope import document_response
-from schemas.cleaner_schema import CleanerLogin, CleanerOut, CleanerRefresh, CleanerSignupRequest
+from schemas.cleaner_schema import (
+    CleanerLogin,
+    CleanerOnboardingUpsertRequest,
+    CleanerOut,
+    CleanerRefresh,
+    CleanerSignupRequest,
+)
 from services.cleaner_service import (
     add_user,
     authenticate_user,
@@ -11,9 +17,10 @@ from services.cleaner_service import (
     refresh_user_tokens_reduce_number_of_logins,
     remove_user,
     retrieve_users,
+    upsert_cleaner_onboarding_profile,
 )
 from security.account_status_check import check_user_account_status_and_permissions
-from security.auth import verify_cleaner_refresh_token
+from security.auth import verify_cleaner_refresh_token, verify_cleaner_token
 from security.principal import AuthPrincipal
 import os
 from dotenv import load_dotenv
@@ -109,6 +116,18 @@ async def refresh_user_tokens(
         expired_access_token=principal.access_token_id,
     )
     return items
+
+
+@router.put("/onboarding")
+@document_response(message="Cleaner onboarding updated successfully")
+async def upsert_cleaner_onboarding(
+    payload: CleanerOnboardingUpsertRequest,
+    principal: AuthPrincipal = Depends(verify_cleaner_token),
+):
+    return await upsert_cleaner_onboarding_profile(
+        cleaner_id=principal.user_id,
+        payload=payload,
+    )
 
 
 @router.delete("/account")

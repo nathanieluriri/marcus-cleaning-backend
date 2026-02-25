@@ -1,8 +1,10 @@
 
 from bson import ObjectId
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from typing import List
 
+from core.cleaner_onboarding_cache import invalidate_cleaner_onboarding_cache
+from core.errors import AppException, ErrorCode
 from repositories.cleaner_repo import (
     create_user,
     get_user,
@@ -13,12 +15,15 @@ from repositories.cleaner_repo import (
 from schemas.cleaner_schema import (
     CleanerCreate,
     CleanerLogin,
+    CleanerOnboardingReviewRequest,
+    CleanerOnboardingUpsertRequest,
     CleanerOut,
     CleanerRefresh,
     CleanerSignupRequest,
     CleanerUpdate,
+    get_cleaner_profile_missing_fields,
 )
-from schemas.imports import AccountStatus, LoginType
+from schemas.imports import AccountStatus, LoginType, OnboardingStatus
 from security.hash import check_password
 from repositories.tokens_repo import get_refresh_tokens,delete_access_token,delete_refresh_token,delete_all_tokens_with_user_id
 from services.auth_helpers import issue_tokens_for_user
@@ -173,6 +178,57 @@ async def update_user_by_id(user_id: str, user_data: CleanerUpdate, is_password_
     if is_password_getting_changed is True:
         QueueManager.get_instance().enqueue("delete_tokens", {"userId": user_id})
     return result
+
+
+async def upsert_cleaner_onboarding_profile(
+    *,
+    cleaner_id: str,
+    payload: CleanerOnboardingUpsertRequest,
+) -> CleanerOut:
+    cleaner = await retrieve_user_by_user_id(id=cleaner_id)
+    next_status = cleaner.onboarding_status
+    next_rejection_reason = cleaner.rejection_reason
+    if cleaner.onboarding_status == OnboardingStatus.REJECTED:
+        next_status = OnboardingStatus.PENDING
+        next_rejection_reason = None
+
+    updated = await update_user_by_id(
+        cleaner_id,
+        CleanerUpdate(
+            profile=payload.profile,
+            onboarding_status=next_status,
+            rejection_reason=next_rejection_reason,
+        ),
+    )
+    invalidate_cleaner_onboarding_cache(cleaner_id)
+    return updated
+
+
+async def review_cleaner_onboarding(
+    *,
+    cleaner_id: str,
+    payload: CleanerOnboardingReviewRequest,
+) -> CleanerOut:
+    cleaner = await retrieve_user_by_user_id(id=cleaner_id)
+    if payload.status == OnboardingStatus.APPROVED:
+        missing_fields = get_cleaner_profile_missing_fields(cleaner.profile)
+        if missing_fields:
+            raise AppException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                code=ErrorCode.VALIDATION_FAILED,
+                message="Cleaner profile is incomplete for onboarding approval",
+                details={"missing_fields": missing_fields},
+            )
+
+    updated = await update_user_by_id(
+        cleaner_id,
+        CleanerUpdate(
+            onboarding_status=payload.status,
+            rejection_reason=payload.rejection_reason if payload.status == OnboardingStatus.REJECTED else None,
+        ),
+    )
+    invalidate_cleaner_onboarding_cache(cleaner_id)
+    return updated
 
 async def authenticate_user_google(user_data: CleanerSignupRequest) -> CleanerOut:
     cleaner = await get_user(filter_dict={"email": user_data.email})

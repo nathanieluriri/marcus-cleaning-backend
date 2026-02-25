@@ -9,6 +9,7 @@ from fastapi import Depends, Request, status
 from core.errors import AppException, ErrorCode, auth_permission_denied, auth_role_mismatch
 from schemas.imports import AccountStatus, PermissionList
 from security.auth import verify_admin_token, verify_any_token, verify_cleaner_token, verify_customer_token
+from security.cleaner_onboarding_check import enforce_cleaner_onboarding_gate
 from security.permissions import make_permission_key
 from security.principal import AuthPrincipal
 from services.admin_service import retrieve_admin_by_admin_id
@@ -123,6 +124,13 @@ async def _check_non_admin_account_status_and_permissions(
         request_method=request_method,
     ):
         raise auth_permission_denied(permission_key)
+
+    if role == "cleaner":
+        await enforce_cleaner_onboarding_gate(
+            principal=principal,
+            permission_key=permission_key,
+            cleaner=account,
+        )
 
     return account
 

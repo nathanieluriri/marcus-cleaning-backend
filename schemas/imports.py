@@ -26,6 +26,12 @@ class AccountStatus(str, Enum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
     SUSPENDED = "SUSPENDED"
+
+
+class OnboardingStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
     
     
     
@@ -34,6 +40,13 @@ class CleaningServices(str, Enum):
     OFFICE = "OFFICE"
     CUSTOM="CUSTOM"
     DEEP_CLEAN = "DEEP_CLEAN"
+
+
+class ExperienceLevel(str, Enum):
+    BEGINNER = "BEGINNER"
+    INTERMEDIATE = "INTERMEDIATE"
+    ADVANCED = "ADVANCED"
+    EXPERT = "EXPERT"
 
 
 class BookingStatus(str, Enum):

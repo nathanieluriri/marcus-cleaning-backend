@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request, status
 
 from core.response_envelope import document_response
 from schemas.admin_schema import AdminBase, AdminCreate, AdminLogin, AdminOut, AdminRefresh
+from schemas.cleaner_schema import CleanerOnboardingReviewRequest
 from schemas.role_permission_template_schema import RolePermissionTemplateUpdate
 from security.account_status_check import check_admin_account_status_and_permissions
 from security.auth import verify_admin_refresh_token
@@ -15,6 +16,7 @@ from services.admin_service import (
     remove_admin,
     retrieve_admins,
 )
+from services.cleaner_service import review_cleaner_onboarding
 from services.permission_catalog_service import build_permission_catalog_from_routes
 from services.role_permission_template_service import (
     get_role_permission_template_view,
@@ -152,6 +154,17 @@ async def get_permissions_catalog(
 ):
     _ = admin
     return build_permission_catalog_from_routes(request.app.routes)
+
+
+@router.patch("/cleaners/{cleaner_id}/onboarding-review")
+@document_response(message="Cleaner onboarding review updated successfully")
+async def review_cleaner_onboarding_by_admin(
+    cleaner_id: str,
+    payload: CleanerOnboardingReviewRequest,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    _ = admin
+    return await review_cleaner_onboarding(cleaner_id=cleaner_id, payload=payload)
 
 
 @router.post("/signup")

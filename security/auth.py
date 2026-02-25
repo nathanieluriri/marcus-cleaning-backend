@@ -40,6 +40,7 @@ async def _resolve_principal(
         role=role,
         access_token_id=token_record.accesstoken,
         jwt_token=credentials.credentials,
+        token_created_at=token_record.dateCreated,
         allow_expired=allow_expired,
     )
 
