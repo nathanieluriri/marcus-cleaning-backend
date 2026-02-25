@@ -18,7 +18,7 @@ GOOGLE_REVERSE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 
 PLACE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 15
 AUTOCOMPLETE_MIN_CHARS = 2
-PLACE_DETAILS_FIELDS = "place_id,name,formatted_address,geometry"
+PLACE_DETAILS_FIELDS = "place_id,name,formatted_address,geometry,address_components"
 DETAILS_CONCURRENCY_LIMIT = 5
 
 
@@ -203,6 +203,22 @@ async def _google_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _extract_country_code(address_components: Any) -> str | None:
+    if not isinstance(address_components, list):
+        return None
+    for component in address_components:
+        if not isinstance(component, dict):
+            continue
+        types = component.get("types")
+        if not isinstance(types, list):
+            continue
+        if "country" in types:
+            short_name = component.get("short_name")
+            if isinstance(short_name, str) and short_name.strip():
+                return short_name.strip().upper()
+    return None
+
+
 def _normalize_place_result(result: dict[str, Any], *, description: str | None = None) -> PlaceOut:
     place_id = str(result.get("place_id") or "").strip()
     if not place_id:
@@ -235,6 +251,7 @@ def _normalize_place_result(result: dict[str, Any], *, description: str | None =
     name = str(result.get("name") or result.get("formatted_address") or place_id)
     formatted_address = str(result.get("formatted_address") or result.get("vicinity") or name)
     normalized_description = description or formatted_address
+    country_code = _extract_country_code(result.get("address_components"))
 
     return PlaceOut(
         place_id=place_id,
@@ -242,6 +259,7 @@ def _normalize_place_result(result: dict[str, Any], *, description: str | None =
         formatted_address=formatted_address,
         longitude=float(lng),
         latitude=float(lat),
+        country_code=country_code,
         description=normalized_description,
     )
 
@@ -413,8 +431,14 @@ async def get_reverse_geocode(lat: float, lng: float, country: str | None = None
 
     place = await get_place_details(place_id=place_id)
     formatted_address = first.get("formatted_address")
+    update_payload: dict[str, Any] = {}
     if isinstance(formatted_address, str) and formatted_address.strip():
-        place = place.model_copy(update={"description": formatted_address.strip()})
+        update_payload["description"] = formatted_address.strip()
+    reverse_country_code = _extract_country_code(first.get("address_components"))
+    if reverse_country_code and not place.country_code:
+        update_payload["country_code"] = reverse_country_code
+    if update_payload:
+        place = place.model_copy(update=update_payload)
 
     _cache_set_json(cache_key, place.model_dump())
     return place

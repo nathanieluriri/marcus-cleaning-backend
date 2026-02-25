@@ -22,6 +22,7 @@ class RefundIn(BaseModel):
 
 class PaymentTransactionCreate(BaseModel):
     owner_id: str
+    booking_id: str | None = None
     provider: str
     reference: str
     status: str
@@ -36,6 +37,7 @@ class PaymentTransactionCreate(BaseModel):
 class PaymentTransactionOut(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     owner_id: str
+    booking_id: str | None = None
     provider: str
     reference: str
     status: str

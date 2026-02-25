@@ -4,3 +4,7 @@ from __future__ import annotations
 ALLOWED_COUNTRIES: tuple[str, ...] = (
     "NG",
 )
+
+COUNTRY_CURRENCY_MAP: dict[str, str] = {
+    "NG": "NGN",
+}

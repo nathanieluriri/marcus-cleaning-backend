@@ -16,7 +16,7 @@ class AddOn(str,Enum):
     CABINETS="CABINETS"
     
 class Extra(BaseModel):
-    add_ons: List[AddOn] = []
+    add_ons: List[AddOn] = Field(default_factory=list)
 
 class LoginType(str, Enum):
     google = "GOOGLE"
@@ -34,6 +34,40 @@ class CleaningServices(str, Enum):
     OFFICE = "OFFICE"
     CUSTOM="CUSTOM"
     DEEP_CLEAN = "DEEP_CLEAN"
+
+
+class BookingStatus(str, Enum):
+    REQUESTED = "REQUESTED"
+    ACCEPTED = "ACCEPTED"
+    CLEANER_COMPLETED = "CLEANER_COMPLETED"
+    CUSTOMER_ACKNOWLEDGED = "CUSTOMER_ACKNOWLEDGED"
+    CANCELLED = "CANCELLED"
+
+
+class PropertyType(str, Enum):
+    APARTMENT = "APARTMENT"
+    HOUSE = "HOUSE"
+    OFFICE = "OFFICE"
+    COMMERCIAL = "COMMERCIAL"
+
+
+class CleaningScopeItem(str, Enum):
+    KITCHEN = "KITCHEN"
+    BATHROOM = "BATHROOM"
+    BEDROOM = "BEDROOM"
+    LIVING_AREA = "LIVING_AREA"
+    WINDOWS = "WINDOWS"
+    APPLIANCES = "APPLIANCES"
+    FLOORS = "FLOORS"
+    UPHOLSTERY = "UPHOLSTERY"
+
+
+class CustomServiceDetails(BaseModel):
+    property_type: PropertyType
+    square_meters: float = Field(gt=0)
+    bedrooms: int = Field(ge=0)
+    bathrooms: int = Field(ge=0)
+    cleaning_scope: List[CleaningScopeItem] = Field(min_length=1)
     
 class Duration(BaseModel):
     hours: int = Field(..., ge=0)

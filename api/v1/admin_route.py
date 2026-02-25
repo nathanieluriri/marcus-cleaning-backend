@@ -47,12 +47,12 @@ PERMISSION_CATALOG_SUCCESS_EXAMPLE: dict[str, object] = {
             "routes": [
                 {
                     "resource": "payments",
-                    "method": "POST",
-                    "path": "/v1/payments/intents",
-                    "normalized_path": "/payments/intents",
-                    "key": "POST:/payments/intents",
-                    "endpoint_name": "create_intent",
-                    "summary": "Payment intent created",
+                    "method": "GET",
+                    "path": "/v1/payments/{payment_id}",
+                    "normalized_path": "/payments/{payment_id}",
+                    "key": "GET:/payments/{payment_id}",
+                    "endpoint_name": "fetch_transaction",
+                    "summary": "Payment transaction fetched",
                     "description": None,
                     "requires_auth": True,
                 }
@@ -69,11 +69,11 @@ PERMISSION_CATALOG_SUCCESS_EXAMPLE: dict[str, object] = {
                 "description": "Customer profile fetched successfully",
             },
             {
-                "name": "create_intent",
-                "methods": ["POST"],
-                "path": "/payments/intents",
-                "key": "POST:/payments/intents",
-                "description": "Payment intent created",
+                "name": "fetch_transaction",
+                "methods": ["GET"],
+                "path": "/payments/{payment_id}",
+                "key": "GET:/payments/{payment_id}",
+                "description": "Payment transaction fetched",
             },
         ]
     },

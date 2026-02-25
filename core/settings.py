@@ -4,11 +4,121 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUPPORTED_PAYMENT_PROVIDERS = {"flutterwave", "stripe", "test"}
+
 
 def _split_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return tuple()
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _env(name: str) -> str | None:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return None
+    normalized = raw_value.strip()
+    return normalized or None
+
+
+def collect_missing_required_env_vars() -> list[str]:
+    missing: list[str] = []
+
+    always_required = (
+        "SECRET_KEY",
+        "SESSION_SECRET_KEY",
+        "GOOGLE_MAPS_API_KEY",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "SUCCESS_PAGE_URL",
+        "ERROR_PAGE_URL",
+        "EMAIL_USERNAME",
+        "EMAIL_PASSWORD",
+        "EMAIL_HOST",
+        "EMAIL_PORT",
+        "CELERY_BROKER_URL",
+        "CELERY_RESULT_BACKEND",
+    )
+    for var_name in always_required:
+        if _env(var_name) is None:
+            missing.append(var_name)
+
+    db_type = (_env("DB_TYPE") or "sqlite").lower()
+    if db_type == "mongodb":
+        if _env("MONGO_URL") is None:
+            missing.append("MONGO_URL")
+        if _env("DB_NAME") is None:
+            missing.append("DB_NAME")
+
+    storage_backend = (_env("STORAGE_BACKEND") or "local").lower()
+    if storage_backend == "s3" and _env("S3_BUCKET_NAME") is None:
+        missing.append("S3_BUCKET_NAME")
+
+    payment_provider = (_env("PAYMENT_DEFAULT_PROVIDER") or "flutterwave").lower()
+    if payment_provider == "flutterwave":
+        for var_name in ("FLUTTERWAVE_SECRET_KEY", "FLW_WEBHOOK_SECRET_HASH"):
+            if _env(var_name) is None:
+                missing.append(var_name)
+    elif payment_provider == "stripe":
+        for var_name in ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"):
+            if _env(var_name) is None:
+                missing.append(var_name)
+    elif payment_provider == "test":
+        if _env("TEST_PAYMENT_BASE_URL") is None:
+            missing.append("TEST_PAYMENT_BASE_URL")
+
+    return sorted(set(missing))
+
+
+def collect_invalid_env_values() -> list[str]:
+    invalid_values: list[str] = []
+
+    payment_provider = (_env("PAYMENT_DEFAULT_PROVIDER") or "flutterwave").lower()
+    if payment_provider not in SUPPORTED_PAYMENT_PROVIDERS:
+        invalid_values.append(
+            "PAYMENT_DEFAULT_PROVIDER must be one of: flutterwave, stripe, test"
+        )
+
+    storage_backend = (_env("STORAGE_BACKEND") or "local").lower()
+    if storage_backend not in {"local", "s3"}:
+        invalid_values.append("STORAGE_BACKEND must be one of: local, s3")
+
+    email_port = _env("EMAIL_PORT")
+    if email_port is not None:
+        try:
+            parsed_port = int(email_port)
+            if parsed_port <= 0:
+                raise ValueError("must be positive")
+        except ValueError:
+            invalid_values.append("EMAIL_PORT must be a positive integer")
+
+    db_type = (_env("DB_TYPE") or "sqlite").lower()
+    if db_type not in {"sqlite", "mongodb"}:
+        invalid_values.append("DB_TYPE must be one of: sqlite, mongodb")
+
+    return invalid_values
+
+
+def validate_required_environment() -> None:
+    missing_vars = collect_missing_required_env_vars()
+    invalid_values = collect_invalid_env_values()
+    if not missing_vars and not invalid_values:
+        return
+
+    message_lines = ["Application startup blocked by invalid environment configuration."]
+    if missing_vars:
+        message_lines.append("")
+        message_lines.append("Missing required environment variables:")
+        message_lines.extend(f"- {name}" for name in missing_vars)
+    if invalid_values:
+        message_lines.append("")
+        message_lines.append("Invalid environment values:")
+        message_lines.extend(f"- {message}" for message in invalid_values)
+    raise RuntimeError("\n".join(message_lines))
 
 
 @dataclass(frozen=True)
@@ -32,6 +142,7 @@ class Settings:
     flutterwave_webhook_secret_hash: str | None
     test_payment_base_url: str | None
     test_payment_webhook_secret_hash: str | None
+    booking_allow_accept_on_pending_payment: bool
 
     @property
     def is_production(self) -> bool:
@@ -40,6 +151,8 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    validate_required_environment()
+
     env = os.getenv("ENV", "development")
     secret_key = os.getenv("SECRET_KEY", "")
     session_secret_key = os.getenv("SESSION_SECRET_KEY", "")
@@ -71,6 +184,9 @@ def get_settings() -> Settings:
         flutterwave_webhook_secret_hash=os.getenv("FLW_WEBHOOK_SECRET_HASH"),
         test_payment_base_url=os.getenv("TEST_PAYMENT_BASE_URL"),
         test_payment_webhook_secret_hash=os.getenv("TEST_PAYMENT_WEBHOOK_SECRET_HASH"),
+        booking_allow_accept_on_pending_payment=(
+            os.getenv("BOOKING_ALLOW_ACCEPT_ON_PENDING_PAYMENT", "true").lower() in {"1", "true", "yes"}
+        ),
     )
 
     if settings.is_production:

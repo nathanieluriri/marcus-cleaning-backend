@@ -4,8 +4,10 @@ import time
 
 from core.errors import AppException, ErrorCode, resource_not_found
 from core.payments import PaymentIntentRequest, PaymentManager
+from repositories.booking_repo import get_booking_by_id
 from repositories.payment_repo import (
     create_payment_transaction,
+    get_payment_transaction_by_booking_id,
     get_payment_transaction_by_id,
     get_payment_transaction_by_reference,
     is_webhook_event_processed,
@@ -13,6 +15,8 @@ from repositories.payment_repo import (
     update_payment_transaction_status,
 )
 from schemas.payment_schema import PaymentIntentIn, PaymentTransactionCreate, WebhookReplayCreate
+from services.customer_service import retrieve_user_by_user_id
+from services.pricing_service import calculate_quote_for_booking
 
 
 def _epoch() -> int:
@@ -52,11 +56,64 @@ async def create_payment_intent(*, owner_id: str, payload: PaymentIntentIn):
     return await create_payment_transaction(
         PaymentTransactionCreate(
             owner_id=owner_id,
+            booking_id=str(payload.metadata.get("booking_id")) if payload.metadata and payload.metadata.get("booking_id") else None,
             provider=intent.provider.value,
             reference=intent.reference,
             status=intent.status.value,
             amount_minor=payload.amount_minor,
             currency=payload.currency,
+            response_payload=intent.provider_payload,
+            idempotency_key=f"{intent.provider.value}:{intent.reference}",
+            created_at=_epoch(),
+            updated_at=_epoch(),
+        )
+    )
+
+
+async def create_payment_for_booking(*, booking_id: str):
+    existing = await get_payment_transaction_by_booking_id(booking_id=booking_id)
+    if existing is not None:
+        return existing
+
+    booking = await get_booking_by_id(booking_id)
+    if booking is None:
+        raise resource_not_found("Booking", booking_id)
+
+    quote = await calculate_quote_for_booking(booking=booking)
+    customer = await retrieve_user_by_user_id(booking.customer_id)
+
+    reference = f"booking-{booking_id}"
+    existing_by_reference = await get_payment_transaction_by_reference(reference=reference)
+    if existing_by_reference is not None:
+        return existing_by_reference
+
+    provider = _get_payment_manager().get_provider(None)
+    intent = await provider.create_intent(
+        PaymentIntentRequest(
+            amount_minor=quote.amount_minor,
+            currency=quote.currency,
+            reference=reference,
+            customer_email=customer.email,
+            metadata={
+                "booking_id": booking_id,
+                "customer_id": booking.customer_id,
+                "cleaner_id": booking.cleaner_id,
+                "place_id": booking.place_id,
+                "service": booking.service.value,
+                "price_breakdown": quote.breakdown,
+            },
+        )
+    )
+
+    return await create_payment_transaction(
+        PaymentTransactionCreate(
+            owner_id=booking.customer_id,
+            booking_id=booking_id,
+            provider=intent.provider.value,
+            reference=intent.reference,
+            status=intent.status.value,
+            amount_minor=quote.amount_minor,
+            currency=quote.currency,
             response_payload=intent.provider_payload,
             idempotency_key=f"{intent.provider.value}:{intent.reference}",
             created_at=_epoch(),
@@ -108,6 +165,13 @@ async def get_payment_transaction(payment_id: str):
     tx = await get_payment_transaction_by_id(payment_id=payment_id)
     if tx is None:
         raise resource_not_found("PaymentTransaction", payment_id)
+    return tx
+
+
+async def get_payment_transaction_by_reference_or_404(reference: str):
+    tx = await get_payment_transaction_by_reference(reference=reference)
+    if tx is None:
+        raise resource_not_found("PaymentTransaction", reference)
     return tx
 
 

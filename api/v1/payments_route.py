@@ -4,27 +4,17 @@ from fastapi import APIRouter, Depends, Request
 
 from core.errors import auth_permission_denied
 from core.response_envelope import document_response
-from schemas.payment_schema import PaymentIntentIn, RefundIn
+from schemas.payment_schema import RefundIn
 from security.auth import verify_any_token
 from security.principal import AuthPrincipal
 from services.payment_service import (
-    create_payment_intent,
     get_payment_transaction,
+    get_payment_transaction_by_reference_or_404,
     process_webhook,
     refund_payment,
 )
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
-
-
-@router.post("/intents")
-@document_response(
-    message="Payment intent created",
-    status_code=201,
-    response_codes={401: "Unauthorized", 409: "Duplicate reference"},
-)
-async def create_intent(payload: PaymentIntentIn, principal: AuthPrincipal = Depends(verify_any_token)):
-    return await create_payment_intent(owner_id=principal.user_id, payload=payload)
 
 
 @router.post("/webhooks/{provider}")
@@ -49,6 +39,15 @@ async def fetch_transaction(payment_id: str, principal: AuthPrincipal = Depends(
     tx = await get_payment_transaction(payment_id=payment_id)
     if tx.owner_id != principal.user_id and not principal.is_admin:
         raise auth_permission_denied("GET:/v1/payments/{payment_id}")
+    return tx
+
+
+@router.get("/reference/{reference}")
+@document_response(message="Payment transaction fetched by reference")
+async def fetch_transaction_by_reference(reference: str, principal: AuthPrincipal = Depends(verify_any_token)):
+    tx = await get_payment_transaction_by_reference_or_404(reference=reference)
+    if tx.owner_id != principal.user_id and not principal.is_admin:
+        raise auth_permission_denied("GET:/v1/payments/reference/{reference}")
     return tx
 
 

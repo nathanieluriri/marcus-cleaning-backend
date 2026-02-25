@@ -9,6 +9,7 @@ class PlaceBase(BaseModel):
     formatted_address: str
     longitude: float
     latitude: float
+    country_code: str | None = None
     description: str | None = None
 
 

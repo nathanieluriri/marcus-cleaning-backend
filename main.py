@@ -149,11 +149,7 @@ async def lifespan(app: FastAPI):
 
     QueueManager.configure(CeleryQueueProvider(celery_app=celery_app))
     DocumentStorageManager.configure_from_settings()
-    try:
-        PaymentManager.configure_from_settings()
-    except RuntimeError:
-        # Payments remain unavailable until provider credentials are configured.
-        pass
+    PaymentManager.configure_from_settings()
 
     try:
         yield
@@ -280,19 +276,23 @@ async def health_check():
 
 # --- auto-routes-start ---
 from api.v1.admin_route import router as v1_admin_route_router
+from api.v1.booking_route import router as v1_booking_route_router
 from api.v1.cleaner_route import router as v1_cleaner_route_router
 from api.v1.customer_route import router as v1_customer_route_router
 from api.v1.documents_route import router as v1_documents_route_router
 from api.v1.payments_route import router as v1_payments_route_router
 from api.v1.place_route import router as v1_place_route_router
+from api.v1.review import router as v1_review_route_router
 from api.web.payment_template_route import router as web_payment_template_router
 
 app.include_router(v1_admin_route_router, prefix='/v1')
+app.include_router(v1_booking_route_router, prefix='/v1')
 app.include_router(v1_cleaner_route_router, prefix='/v1')
 app.include_router(v1_customer_route_router, prefix='/v1')
 app.include_router(v1_documents_route_router, prefix='/v1')
 app.include_router(v1_payments_route_router, prefix='/v1')
 app.include_router(v1_place_route_router, prefix='/v1')
+app.include_router(v1_review_route_router, prefix='/v1')
 app.include_router(web_payment_template_router)
 # --- auto-routes-end ---
 
