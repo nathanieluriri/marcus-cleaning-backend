@@ -6,24 +6,36 @@ from schemas.imports import *
 from pydantic import AliasChoices, ConfigDict, Field, model_validator
 import time
 
-
 class BookingBase(BaseModel):
     customer_id: str
     place_id: str
     cleaner_id: str
+    # Unix timestamp
+    schedule: int = Field(
+        description="Unix timestamp. Must be at least 1 hour in the future."
+    )
     extras: Extra = Field(default_factory=Extra)
     service: CleaningServices
     duration: Duration
-    custom_details: CustomServiceDetails | None = None
+    custom_details: Optional[CustomServiceDetails] = None
 
     @model_validator(mode="after")
-    def validate_custom_service_details(self):
+    def validate_booking(self) -> "BookingBase":
+        # 1. Validate Schedule Time (Must be >= 1 hour from now)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        one_hour_from_now = now_ts + 3600
+        
+        if self.schedule < one_hour_from_now:
+            raise ValueError("The scheduled time must be at least 1 hour from now.")
+
+        # 2. Validate Custom Service Logic
         if self.service == CleaningServices.CUSTOM and self.custom_details is None:
             raise ValueError("custom_details is required when service is CUSTOM")
+        
         if self.service != CleaningServices.CUSTOM and self.custom_details is not None:
             raise ValueError("custom_details is only allowed when service is CUSTOM")
+            
         return self
-
 
 class BookingCreate(BookingBase):
     status: BookingStatus = BookingStatus.REQUESTED

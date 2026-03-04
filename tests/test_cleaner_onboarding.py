@@ -63,21 +63,21 @@ def _profile() -> CleanerProfile:
         weekly_availability=WeeklyAvailability(
             days=[
                 DailyAvailability(
-                    day="MONDAY",
-                    time_ranges=[{"start_time": "08:00", "end_time": "12:00"}],
+                    day="MONDAY", # pyright: ignore[reportArgumentType]
+                    time_ranges=[{"start_time": "08:00", "end_time": "12:00"}], # pyright: ignore[reportArgumentType]
                 ),
                 DailyAvailability(
-                    day="WEDNESDAY",
-                    time_ranges=[{"start_time": "10:00", "end_time": "14:00"}],
+                    day="WEDNESDAY", # pyright: ignore[reportArgumentType]
+                    time_ranges=[{"start_time": "10:00", "end_time": "14:00"}], # pyright: ignore[reportArgumentType]
                 ),
                 DailyAvailability(
-                    day="FRIDAY",
-                    time_ranges=[{"start_time": "09:00", "end_time": "13:00"}],
+                    day="FRIDAY", # pyright: ignore[reportArgumentType]
+                    time_ranges=[{"start_time": "09:00", "end_time": "13:00"}], # pyright: ignore[reportArgumentType]
                 ),
             ]
         ),
         experience_level=ExperienceLevel.INTERMEDIATE,
-        government_id_image_url="https://example.com/id.png",
+        government_id_image_url="https://example.com/id.png", # pyright: ignore[reportArgumentType]
         services=[CleaningServices.STANDARD, CleaningServices.DEEP_CLEAN],
         payout_information=CleanerPayoutInformation(
             account_holder_name="Jane Doe",
@@ -122,8 +122,8 @@ def test_weekly_availability_requires_minimum_three_days():
     with pytest.raises(ValidationError):
         WeeklyAvailability(
             days=[
-                DailyAvailability(day="MONDAY", time_ranges=[{"start_time": "08:00", "end_time": "12:00"}]),
-                DailyAvailability(day="TUESDAY", time_ranges=[{"start_time": "08:00", "end_time": "12:00"}]),
+                DailyAvailability(day="MONDAY", time_ranges=[{"start_time": "08:00", "end_time": "12:00"}]), # pyright: ignore[reportArgumentType]
+                DailyAvailability(day="TUESDAY", time_ranges=[{"start_time": "08:00", "end_time": "12:00"}]), # pyright: ignore[reportArgumentType]
             ]
         )
 
@@ -254,7 +254,7 @@ async def test_review_onboarding_approve_requires_profile(monkeypatch: pytest.Mo
         )
 
     assert exc_info.value.status_code == 422
-    assert exc_info.value.detail["code"] == ErrorCode.VALIDATION_FAILED.value
+    assert exc_info.value.detail["code"] == ErrorCode.VALIDATION_FAILED.value # pyright: ignore[reportArgumentType]
 
 
 def test_onboarding_cache_uses_access_token_key(monkeypatch: pytest.MonkeyPatch):
