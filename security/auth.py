@@ -38,7 +38,7 @@ async def _resolve_principal(
     return AuthPrincipal(
         user_id=token_record.userId,
         role=role,
-        access_token_id=token_record.accesstoken,
+        access_token_id=token_record.accesstoken, # type: ignore
         jwt_token=credentials.credentials,
         token_created_at=token_record.dateCreated,
         allow_expired=allow_expired,

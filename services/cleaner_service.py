@@ -214,7 +214,7 @@ async def review_cleaner_onboarding(
         missing_fields = get_cleaner_profile_missing_fields(cleaner.profile)
         if missing_fields:
             raise AppException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code=ErrorCode.VALIDATION_FAILED,
                 message="Cleaner profile is incomplete for onboarding approval",
                 details={"missing_fields": missing_fields},

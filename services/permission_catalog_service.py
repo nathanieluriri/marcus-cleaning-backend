@@ -32,9 +32,26 @@ def _resource_from_path(path: str) -> str:
 
 
 def _requires_auth(dependant: Dependant) -> bool:
-    if dependant.security_requirements:
+    security_requirements = getattr(dependant, "security_requirements", None)
+    if security_requirements:
         return True
-    return any(_requires_auth(child) for child in dependant.dependencies)
+    security_scopes = getattr(dependant, "security_scopes", None)
+    if security_scopes:
+        return True
+
+    call = getattr(dependant, "call", None)
+    if call is not None:
+        call_module = getattr(call, "__module__", "") or ""
+        call_name = getattr(call, "__name__", "") or ""
+        call_qualname = getattr(call, "__qualname__", "") or ""
+        call_fingerprint = f"{call_module}:{call_name}:{call_qualname}".lower()
+        if "fastapi.security" in call_module:
+            return True
+        if any(token in call_fingerprint for token in ("bearer", "oauth", "api_key", "httppassword")):
+            return True
+
+    child_dependencies = getattr(dependant, "dependencies", None) or []
+    return any(_requires_auth(child) for child in child_dependencies)
 
 
 def _is_assignable_api_route(route: APIRoute) -> bool:
@@ -110,4 +127,3 @@ def build_permission_catalog_from_routes(routes: Iterable[object]) -> Permission
         for resource in sorted(grouped_map)
     ]
     return PermissionCatalogOut(grouped=grouped, flat=PermissionList(permissions=flat_permissions))
-

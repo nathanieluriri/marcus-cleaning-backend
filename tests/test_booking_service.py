@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ def _booking_payload(*, customer_id: str = "customer-1") -> BookingBase:
         customer_id=customer_id,
         place_id="place-1",
         cleaner_id="cleaner-1",
+        schedule=int(time.time()) + 7_200,
         extras=Extra(add_ons=[]),
         service=CleaningServices.STANDARD,
         duration=Duration(hours=2, minutes=0),
@@ -38,6 +40,7 @@ def _booking_out(**overrides) -> BookingOut:
         "customer_id": "customer-1",
         "place_id": "place-1",
         "cleaner_id": "cleaner-1",
+        "schedule": int(time.time()) + 7_200,
         "extras": Extra(add_ons=[]),
         "service": CleaningServices.STANDARD,
         "duration": Duration(hours=2, minutes=0),

@@ -15,6 +15,14 @@ class AddOn(str,Enum):
     WINDOWS="WINDOWS"
     CABINETS="CABINETS"
     
+class NotificationType(str,Enum):
+    SERVICE_UPDATE="SERVICE_UPDATE"
+
+class NotificationTitle(str,Enum):
+    CLEANER_IS_ON_THE_WAY="Cleaner is on the way"
+
+    
+    
 class Extra(BaseModel):
     add_ons: List[AddOn] = Field(default_factory=list)
 

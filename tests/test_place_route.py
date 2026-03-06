@@ -73,7 +73,7 @@ def test_autocomplete_route_returns_enriched_places(monkeypatch):
 def test_autocomplete_route_requires_auth():
     client = TestClient(_build_app(with_auth_override=False))
     response = client.get("/v1/places/autocomplete", params={"input": "Lekki", "country": "NG"})
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 def test_details_route_requires_place_id_query_param():
@@ -85,7 +85,7 @@ def test_details_route_requires_place_id_query_param():
 def test_details_route_requires_auth():
     client = TestClient(_build_app(with_auth_override=False))
     response = client.get("/v1/places/details", params={"place_id": "pid-1"})
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 def test_save_search_results_route_uses_principal_user_id(monkeypatch):

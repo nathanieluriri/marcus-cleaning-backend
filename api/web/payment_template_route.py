@@ -75,6 +75,7 @@ async def _get_test_payment_intent(reference: str) -> dict[str, Any] | None:
 async def payment_template_page(request: Request):
     payment = build_test_payment_preview()
     return templates.TemplateResponse(
+        request,
         "payment_template.html",
         {
             "request": request,
@@ -92,6 +93,7 @@ async def payment_page(reference: str, request: Request):
 
     payment = _build_payment_preview_from_row(row)
     return templates.TemplateResponse(
+        request,
         "payment_template.html",
         {
             "request": request,

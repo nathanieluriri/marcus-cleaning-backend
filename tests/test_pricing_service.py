@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -20,12 +21,20 @@ from schemas.place import PlaceOut
 from services import pricing_service
 
 
+@pytest.fixture(autouse=True)
+def _clear_pricing_place_cache():
+    pricing_service._place_resolution_cache.clear()
+    yield
+    pricing_service._place_resolution_cache.clear()
+
+
 def _make_booking(**overrides) -> BookingOut:
     payload = {
         "id": "booking-1",
         "customer_id": "customer-1",
         "place_id": "place-1",
         "cleaner_id": "cleaner-1",
+        "schedule": int(time.time()) + 7_200,
         "extras": Extra(add_ons=[]),
         "service": CleaningServices.STANDARD,
         "duration": Duration(hours=2, minutes=0),
@@ -121,3 +130,32 @@ async def test_calculate_quote_rejects_unsupported_country(monkeypatch: pytest.M
     exc = exc_info.value
     assert exc.status_code == 422
     assert exc.detail["code"] == ErrorCode.VALIDATION_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_calculate_quote_reuses_place_resolution_cache(monkeypatch: pytest.MonkeyPatch):
+    booking = _make_booking(place_id="place-cache")
+    call_count = 0
+    pricing_service._place_resolution_cache.clear()
+
+    async def _stub_resolve_place(place_id: str) -> PlaceOut:
+        nonlocal call_count
+        call_count += 1
+        assert place_id == "place-cache"
+        return PlaceOut(
+            place_id=place_id,
+            name="Lekki",
+            formatted_address="Lekki, Lagos",
+            longitude=3.4,
+            latitude=6.4,
+            country_code="NG",
+        )
+
+    monkeypatch.setattr(pricing_service, "_resolve_place", _stub_resolve_place)
+
+    first_quote = await pricing_service.calculate_quote_for_booking(booking=booking)
+    second_quote = await pricing_service.calculate_quote_for_booking(booking=booking)
+
+    assert call_count == 1
+    assert first_quote.amount_minor == second_quote.amount_minor
+    assert first_quote.currency == second_quote.currency

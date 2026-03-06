@@ -20,6 +20,11 @@ PLACE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 15
 AUTOCOMPLETE_MIN_CHARS = 2
 PLACE_DETAILS_FIELDS = "place_id,name,formatted_address,geometry,address_components"
 DETAILS_CONCURRENCY_LIMIT = 5
+PLACES_HTTP_TIMEOUT_SECONDS = 10.0
+PLACES_HTTP_MAX_CONNECTIONS = 100
+PLACES_HTTP_MAX_KEEPALIVE_CONNECTIONS = 20
+
+_places_http_client: httpx.AsyncClient | None = None
 
 
 def _require_google_maps_api_key() -> str:
@@ -162,14 +167,53 @@ def _raise_provider_status_error(*, status_value: str, error_message: str | None
     )
 
 
+def _build_places_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(PLACES_HTTP_TIMEOUT_SECONDS),
+        limits=httpx.Limits(
+            max_connections=PLACES_HTTP_MAX_CONNECTIONS,
+            max_keepalive_connections=PLACES_HTTP_MAX_KEEPALIVE_CONNECTIONS,
+        ),
+    )
+
+
+async def initialize_places_http_client() -> None:
+    global _places_http_client
+    if _places_http_client is None or _places_http_client.is_closed:
+        _places_http_client = _build_places_http_client()
+
+
+async def shutdown_places_http_client() -> None:
+    global _places_http_client
+    client = _places_http_client
+    _places_http_client = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+async def _get_places_http_client() -> httpx.AsyncClient:
+    client = _places_http_client
+    if client is not None and not client.is_closed:
+        return client
+    await initialize_places_http_client()
+    client = _places_http_client
+    if client is None:
+        raise AppException(
+            status_code=500,
+            code=ErrorCode.INTERNAL_ERROR,
+            message="Places HTTP client initialization failed",
+        )
+    return client
+
+
 async def _google_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     request_params = dict(params)
     request_params["key"] = _require_google_maps_api_key()
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url, params=request_params)
-            response.raise_for_status()
+        client = await _get_places_http_client()
+        response = await client.get(url, params=request_params)
+        response.raise_for_status()
     except httpx.HTTPStatusError as err:
         raise AppException(
             status_code=502,

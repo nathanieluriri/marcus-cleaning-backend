@@ -37,6 +37,7 @@ from core.settings import get_settings
 from core.role_config import build_role_rate_limits, build_role_rate_limits_csv, normalize_role
 from core.storage.manager import DocumentStorageManager
 from repositories.tokens_repo import get_access_token_allow_expired
+from services.place_service import initialize_places_http_client, shutdown_places_http_client
 
 settings = get_settings()
 BASE_DIR = Path(__file__).resolve().parent
@@ -57,9 +58,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 class RequestTimingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
+        start_time = time.perf_counter()
         response = await call_next(request)
-        response.headers["X-Process-Time"] = str(time.time() - start_time)
+        response.headers["X-Process-Time"] = str(time.perf_counter() - start_time)
         return response
 
 
@@ -150,10 +151,12 @@ async def lifespan(app: FastAPI):
     QueueManager.configure(CeleryQueueProvider(celery_app=celery_app))
     DocumentStorageManager.configure_from_settings()
     PaymentManager.configure_from_settings()
+    await initialize_places_http_client()
 
     try:
         yield
     finally:
+        await shutdown_places_http_client()
         scheduler.shutdown()
 
 
@@ -278,6 +281,7 @@ async def health_check():
 from api.v1.admin_route import router as v1_admin_route_router
 from api.v1.booking_route import router as v1_booking_route_router
 from api.v1.cleaner_route import router as v1_cleaner_route_router
+from api.v1.customer_route import customer_app_router as v1_customer_app_route_router
 from api.v1.customer_route import router as v1_customer_route_router
 from api.v1.documents_route import router as v1_documents_route_router
 from api.v1.payments_route import router as v1_payments_route_router
@@ -288,6 +292,7 @@ from api.web.payment_template_route import router as web_payment_template_router
 app.include_router(v1_admin_route_router, prefix='/v1')
 app.include_router(v1_booking_route_router, prefix='/v1')
 app.include_router(v1_cleaner_route_router, prefix='/v1')
+app.include_router(v1_customer_app_route_router, prefix='/v1')
 app.include_router(v1_customer_route_router, prefix='/v1')
 app.include_router(v1_documents_route_router, prefix='/v1')
 app.include_router(v1_payments_route_router, prefix='/v1')
