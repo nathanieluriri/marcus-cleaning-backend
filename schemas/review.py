@@ -14,7 +14,7 @@ import time
 class ReviewBase(BaseModel):
     customer_id:str
     booking_id:str
-    comment:str
+    comment:str = Field(min_length=10)
     stars:int=Field(ge=0,le=5)
 
 class ReviewCreate(ReviewBase):
@@ -25,6 +25,7 @@ class ReviewCreate(ReviewBase):
 
 class ReviewUpdate(BaseModel):
     # Add other fields here 
+    comment: str | None = Field(default=None, min_length=10)
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
 class ReviewOut(ReviewBase):

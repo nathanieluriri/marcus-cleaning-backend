@@ -1,20 +1,41 @@
 from __future__ import annotations
 
 import time
+from pymongo.errors import DuplicateKeyError
 
 from core.errors import AppException, ErrorCode, resource_not_found
 from core.payments import PaymentIntentRequest, PaymentManager
 from repositories.booking_repo import get_booking_by_id
+from repositories.payment_method_repo import (
+    clear_default_payment_method,
+    create_payment_method,
+    delete_payment_method,
+    get_most_recent_payment_method,
+    get_payment_method_by_id,
+    list_payment_methods,
+    mark_payment_method_default,
+    update_payment_method,
+)
 from repositories.payment_repo import (
     create_payment_transaction,
     get_payment_transaction_by_booking_id,
     get_payment_transaction_by_id,
     get_payment_transaction_by_reference,
     is_webhook_event_processed,
+    list_pending_payment_transactions,
     mark_webhook_event_processed,
     update_payment_transaction_status,
 )
-from schemas.payment_schema import PaymentIntentIn, PaymentTransactionCreate, WebhookReplayCreate
+from schemas.payment_schema import (
+    PaymentIntentIn,
+    PaymentMethodCreate,
+    PaymentMethodCreateIn,
+    PaymentMethodOut,
+    PaymentMethodUpdate,
+    PaymentMethodUpdateIn,
+    PaymentTransactionCreate,
+    WebhookReplayCreate,
+)
 from services.customer_service import retrieve_user_by_user_id
 from services.pricing_service import calculate_quote_for_booking
 
@@ -190,3 +211,127 @@ async def refund_payment(*, payment_id: str, amount_minor: int | None = None):
     if updated is None:
         raise resource_not_found("PaymentTransaction", payment_id)
     return updated
+
+
+async def reconcile_payment_transaction(*, payment_id: str):
+    tx = await get_payment_transaction_by_id(payment_id=payment_id)
+    if tx is None:
+        raise resource_not_found("PaymentTransaction", payment_id)
+
+    provider = _get_payment_manager().get_provider(tx.provider)
+    fetched = await provider.fetch_transaction(reference=tx.reference)
+    updated = await update_payment_transaction_status(
+        reference=tx.reference,
+        status=fetched.status.value,
+        response_payload=fetched.raw,
+    )
+    if updated is None:
+        raise resource_not_found("PaymentTransaction", payment_id)
+    return updated
+
+
+async def reconcile_pending_payments(*, limit: int = 50) -> dict[str, int]:
+    pending_transactions = await list_pending_payment_transactions(limit=limit)
+    updated = 0
+    failed = 0
+    for tx in pending_transactions:
+        if not tx.id:
+            failed += 1
+            continue
+        try:
+            await reconcile_payment_transaction(payment_id=tx.id)
+            updated += 1
+        except Exception:
+            failed += 1
+    return {
+        "checked": len(pending_transactions),
+        "updated": updated,
+        "failed": failed,
+    }
+
+
+async def list_payment_methods_for_owner(*, owner_id: str, start: int = 0, stop: int = 100) -> list[PaymentMethodOut]:
+    return await list_payment_methods(owner_id=owner_id, start=start, stop=stop)
+
+
+async def add_payment_method_for_owner(*, owner_id: str, payload: PaymentMethodCreateIn) -> PaymentMethodOut:
+    existing = await list_payment_methods(owner_id=owner_id, start=0, stop=1)
+    should_default = bool(payload.is_default) or len(existing) == 0
+    if should_default:
+        await clear_default_payment_method(owner_id=owner_id)
+    try:
+        return await create_payment_method(
+            PaymentMethodCreate(
+                owner_id=owner_id,
+                provider=payload.provider.strip().lower(),
+                provider_method_ref=payload.provider_method_ref,
+                type=payload.type,
+                label=payload.label,
+                brand=payload.brand,
+                last4=payload.last4,
+                exp_month=payload.exp_month,
+                exp_year=payload.exp_year,
+                bank_name=payload.bank_name,
+                is_default=should_default,
+                status="active",
+                created_at=_epoch(),
+                updated_at=_epoch(),
+            )
+        )
+    except DuplicateKeyError as err:
+        raise AppException(
+            status_code=409,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Payment method already exists for this account",
+            details={"provider": payload.provider, "provider_method_ref": payload.provider_method_ref},
+        ) from err
+
+
+async def update_payment_method_for_owner(
+    *,
+    owner_id: str,
+    method_id: str,
+    payload: PaymentMethodUpdateIn,
+) -> PaymentMethodOut:
+    updated = await update_payment_method(
+        method_id=method_id,
+        owner_id=owner_id,
+        payload=PaymentMethodUpdate(
+            label=payload.label,
+            brand=payload.brand,
+            exp_month=payload.exp_month,
+            exp_year=payload.exp_year,
+            bank_name=payload.bank_name,
+            status=payload.status,
+            updated_at=_epoch(),
+        ),
+    )
+    if updated is None:
+        raise resource_not_found("PaymentMethod", method_id)
+    return updated
+
+
+async def set_default_payment_method_for_owner(*, owner_id: str, method_id: str) -> PaymentMethodOut:
+    existing = await get_payment_method_by_id(method_id=method_id, owner_id=owner_id)
+    if existing is None:
+        raise resource_not_found("PaymentMethod", method_id)
+    await clear_default_payment_method(owner_id=owner_id)
+    updated = await mark_payment_method_default(method_id=method_id, owner_id=owner_id, updated_at=_epoch())
+    if updated is None:
+        raise resource_not_found("PaymentMethod", method_id)
+    return updated
+
+
+async def delete_payment_method_for_owner(*, owner_id: str, method_id: str) -> dict[str, bool]:
+    existing = await get_payment_method_by_id(method_id=method_id, owner_id=owner_id)
+    if existing is None:
+        raise resource_not_found("PaymentMethod", method_id)
+    deleted = await delete_payment_method(method_id=method_id, owner_id=owner_id)
+    if not deleted:
+        raise resource_not_found("PaymentMethod", method_id)
+    if existing.is_default:
+        fallback = await get_most_recent_payment_method(owner_id=owner_id)
+        if fallback is not None and fallback.id:
+            await clear_default_payment_method(owner_id=owner_id)
+            await mark_payment_method_default(method_id=fallback.id, owner_id=owner_id, updated_at=_epoch())
+    return {"deleted": True}

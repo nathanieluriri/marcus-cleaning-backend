@@ -170,7 +170,7 @@ def test_booking_list_allows_approved_cleaner(monkeypatch: pytest.MonkeyPatch):
         )
 
     async def _stub_retrieve_bookings_for_principal(**_kwargs):
-        return []
+        return {"items": [], "nextCursor": None}
 
     monkeypatch.setattr("security.cleaner_onboarding_check.retrieve_user_by_user_id", _stub_retrieve_user_by_user_id)
     monkeypatch.setattr(booking_route, "retrieve_bookings_for_principal", _stub_retrieve_bookings_for_principal)
@@ -189,7 +189,8 @@ def test_booking_list_allows_approved_cleaner(monkeypatch: pytest.MonkeyPatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
-    assert payload["data"] == []
+    assert payload["data"]["items"] == []
+    assert payload["data"]["nextCursor"] is None
 
 
 def test_cleaner_me_route_is_accessible_while_pending(monkeypatch: pytest.MonkeyPatch):

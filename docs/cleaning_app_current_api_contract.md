@@ -176,6 +176,50 @@ Error responses follow the backend error envelope:
 - Path: `/v1/notifications/{notificationId}`
 - Response `204` empty body.
 
+## Settings Contract
+
+### Fetch Settings Snapshot
+- Method: `GET`
+- Path: `/v1/settings`
+- Response `200` (`data`):
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "channels": {
+      "push": true,
+      "email": true,
+      "sms": false
+    },
+    "quietHours": {
+      "enabled": false,
+      "startTime": "22:00",
+      "endTime": "07:00",
+      "timezone": "UTC"
+    }
+  },
+  "privacy": {},
+  "security": {
+    "biometricLoginEnabled": false,
+    "twoFactorEnabled": false
+  },
+  "sessions": {},
+  "legal": {}
+}
+```
+
+### Update Notification Preferences
+- Method: `PATCH`
+- Path: `/v1/settings/notifications`
+- Request body: partial notification preference payload (supports `enabled`, `channels`, `quietHours`).
+- Response `200` (`data`): updated `notifications` preference object.
+
+### Update Security Preferences
+- Method: `PATCH`
+- Path: `/v1/settings/security`
+- Request body: partial security preference payload (supports `biometricLoginEnabled`, `twoFactorEnabled`).
+- Response `200` (`data`): updated `security` preference object.
+
 ## Auth Header Contract
 
 Protected endpoints use:

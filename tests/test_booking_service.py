@@ -6,7 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from core.errors import AppException, ErrorCode
-from schemas.booking import BookingBase, BookingOut
+from schemas.booking import (
+    BookingBase,
+    BookingHistoryScheduledSort,
+    BookingHistoryScope,
+    BookingOut,
+    BookingPaymentStatus,
+)
 from schemas.imports import BookingStatus, CleaningServices, Duration, Extra
 from security.principal import AuthPrincipal
 from services import booking_service
@@ -220,3 +226,51 @@ async def test_accept_booking_transitions_status_after_successful_payment(
     )
 
     assert result.status == BookingStatus.ACCEPTED
+
+
+@pytest.mark.asyncio
+async def test_retrieve_bookings_for_principal_returns_cursor_page(monkeypatch: pytest.MonkeyPatch):
+    principal = _principal(role="customer", user_id="customer-1")
+    captured: dict = {}
+
+    async def _stub_get_bookings_history(**kwargs):
+        captured.update(kwargs)
+        return [_booking_out(id="booking-1"), _booking_out(id="booking-2")]
+
+    monkeypatch.setattr(booking_service, "get_bookings_history", _stub_get_bookings_history)
+
+    result = await booking_service.retrieve_bookings_for_principal(
+        principal=principal,
+        status_filter=BookingStatus.REQUESTED,
+        scope=BookingHistoryScope.UPCOMING,
+        payment_status=BookingPaymentStatus.PENDING,
+        cursor="5",
+        page_size=1,
+        scheduled_sort=BookingHistoryScheduledSort.ASC,
+    )
+
+    assert captured["filter_dict"]["customer_id"] == "customer-1"
+    assert captured["filter_dict"]["status"] == BookingStatus.REQUESTED.value
+    assert captured["scope"] == BookingHistoryScope.UPCOMING.value
+    assert captured["payment_status"] == BookingPaymentStatus.PENDING.value
+    assert captured["cursor_offset"] == 5
+    assert captured["page_size"] == 1
+    assert captured["scheduled_sort"] == BookingHistoryScheduledSort.ASC.value
+    assert len(result.items) == 1
+    assert result.items[0].id == "booking-1"
+    assert result.nextCursor == "6"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_bookings_for_principal_rejects_invalid_cursor():
+    principal = _principal(role="customer", user_id="customer-1")
+
+    with pytest.raises(AppException) as exc_info:
+        await booking_service.retrieve_bookings_for_principal(
+            principal=principal,
+            cursor="invalid-cursor",
+        )
+
+    exc = exc_info.value
+    assert exc.status_code == 400
+    assert exc.detail["code"] == ErrorCode.VALIDATION_FAILED.value

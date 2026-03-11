@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, Path, Query, status
 
 from core.response_envelope import document_response
 from core.settings import get_settings
-from schemas.booking import BookingBase, BookingOut
+from schemas.booking import (
+    BookingBase,
+    BookingHistoryScheduledSort,
+    BookingHistoryScope,
+    BookingOut,
+    BookingPaymentStatus,
+)
 from schemas.imports import BookingStatus
 from security.booking_access_check import (
     require_booking_principal,
@@ -34,18 +40,30 @@ async def create_booking(
 
 
 @router.get("/")
-@document_response(message="Bookings fetched successfully", success_example=[])
+@document_response(message="Bookings fetched successfully", success_example={"items": [], "nextCursor": None})
 async def list_bookings(
-    start: int = Query(default=0, ge=0),
-    stop: int = Query(default=100, gt=0, le=200),
     status_filter: BookingStatus | None = Query(default=None, alias="status"),
+    scope: BookingHistoryScope = Query(default=BookingHistoryScope.ALL),
+    payment_status: BookingPaymentStatus | None = Query(default=None),
+    payment_status_camel: BookingPaymentStatus | None = Query(default=None, alias="paymentStatus"),
+    cursor: str | None = Query(default=None),
+    page_size: int = Query(default=20, ge=1, le=100),
+    page_size_camel: int | None = Query(default=None, alias="pageSize", ge=1, le=100),
+    scheduled_sort: BookingHistoryScheduledSort = Query(default=BookingHistoryScheduledSort.DESC),
+    scheduled_sort_camel: BookingHistoryScheduledSort | None = Query(default=None, alias="scheduledSort"),
     principal: AuthPrincipal = Depends(require_booking_principal),
 ):
+    effective_payment_status = payment_status_camel or payment_status
+    effective_page_size = page_size_camel if page_size_camel is not None else page_size
+    effective_scheduled_sort = scheduled_sort_camel or scheduled_sort
     return await retrieve_bookings_for_principal(
         principal=principal,
-        start=start,
-        stop=stop,
         status_filter=status_filter,
+        scope=scope,
+        payment_status=effective_payment_status,
+        cursor=cursor,
+        page_size=effective_page_size,
+        scheduled_sort=effective_scheduled_sort,
     )
 
 

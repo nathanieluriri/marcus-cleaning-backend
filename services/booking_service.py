@@ -9,11 +9,19 @@ from repositories.booking_repo import (
     create_booking,
     delete_booking,
     get_booking_by_id,
-    get_bookings,
+    get_bookings_history,
     transition_booking_status,
     update_booking_fields,
 )
-from schemas.booking import BookingBase, BookingCreate, BookingOut
+from schemas.booking import (
+    BookingBase,
+    BookingCreate,
+    BookingHistoryPage,
+    BookingHistoryScheduledSort,
+    BookingHistoryScope,
+    BookingOut,
+    BookingPaymentStatus,
+)
 from schemas.imports import BookingStatus
 from security.principal import AuthPrincipal
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
@@ -36,6 +44,18 @@ def _status_conflict(*, current_status: BookingStatus, expected_status: BookingS
             "expected_status": expected_status.value,
         },
     )
+
+
+def _parse_cursor_offset(*, cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    if not cursor.isdigit():
+        raise AppException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="cursor must be a non-negative integer string",
+        )
+    return int(cursor)
 
 
 async def create_booking_for_customer(*, principal: AuthPrincipal, payload: BookingBase) -> BookingOut:
@@ -118,11 +138,14 @@ async def retrieve_booking_for_principal(*, booking_id: str, principal: AuthPrin
 async def retrieve_bookings_for_principal(
     *,
     principal: AuthPrincipal,
-    start: int = 0,
-    stop: int = 100,
     status_filter: BookingStatus | None = None,
-) -> list[BookingOut]:
-    filter_dict: dict = {}
+    scope: BookingHistoryScope = BookingHistoryScope.ALL,
+    payment_status: BookingPaymentStatus | None = None,
+    cursor: str | None = None,
+    page_size: int = 20,
+    scheduled_sort: BookingHistoryScheduledSort = BookingHistoryScheduledSort.DESC,
+) -> BookingHistoryPage:
+    filter_dict: dict[str, str] = {}
     if principal.role == "customer":
         filter_dict["customer_id"] = principal.user_id
     elif principal.role == "cleaner":
@@ -133,7 +156,20 @@ async def retrieve_bookings_for_principal(
     if status_filter is not None:
         filter_dict["status"] = status_filter.value
 
-    return await get_bookings(filter_dict=filter_dict, start=start, stop=stop)
+    offset = _parse_cursor_offset(cursor=cursor)
+    fetched = await get_bookings_history(
+        filter_dict=filter_dict,
+        scope=scope.value,
+        now_epoch=_epoch(),
+        payment_status=payment_status.value if payment_status is not None else None,
+        cursor_offset=offset,
+        page_size=page_size,
+        scheduled_sort=scheduled_sort.value,
+    )
+    has_more = len(fetched) > page_size
+    items = fetched[:page_size]
+    next_cursor = str(offset + page_size) if has_more else None
+    return BookingHistoryPage(items=items, nextCursor=next_cursor)
 
 
 async def accept_booking(

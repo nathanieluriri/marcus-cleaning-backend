@@ -6,6 +6,25 @@ from schemas.imports import *
 from pydantic import AliasChoices, ConfigDict, Field, model_validator
 import time
 
+
+class BookingHistoryScope(str, Enum):
+    ALL = "all"
+    UPCOMING = "upcoming"
+    PAST = "past"
+
+
+class BookingHistoryScheduledSort(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+class BookingPaymentStatus(str, Enum):
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
+
 class BookingBase(BaseModel):
     customer_id: str
     place_id: str
@@ -113,3 +132,8 @@ class BookingOut(BookingBase):
         arbitrary_types_allowed=True,
         json_encoders={ObjectId: str},
     )
+
+
+class BookingHistoryPage(BaseModel):
+    items: list[BookingOut]
+    nextCursor: str | None = None

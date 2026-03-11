@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from bson import ObjectId
 from pymongo import ReturnDocument
 
@@ -25,6 +27,7 @@ async def _ensure_payment_indexes() -> None:
         sparse=True,
     )
     await db.payment_transactions.create_index("owner_id", name="idx_payment_owner_id")
+    await db.payment_transactions.create_index("status", name="idx_payment_status")
     await db.payment_webhook_events.create_index(
         [("provider", 1), ("event_id", 1)],
         name="idx_payment_webhook_provider_event_unique",
@@ -56,11 +59,27 @@ async def get_payment_transaction_by_booking_id(booking_id: str) -> PaymentTrans
     return PaymentTransactionOut(**row)
 
 
+async def list_pending_payment_transactions(limit: int) -> list[PaymentTransactionOut]:
+    await _ensure_payment_indexes()
+    capped_limit = max(limit, 0)
+    if capped_limit == 0:
+        return []
+    items: list[PaymentTransactionOut] = []
+    cursor = (
+        db.payment_transactions.find({"status": "pending"})
+        .sort("updated_at", 1)
+        .limit(capped_limit)
+    )
+    async for row in cursor:
+        items.append(PaymentTransactionOut(**row))
+    return items
+
+
 async def update_payment_transaction_status(reference: str, status: str, response_payload: dict) -> PaymentTransactionOut | None:
     await _ensure_payment_indexes()
     row = await db.payment_transactions.find_one_and_update(
         {"reference": reference},
-        {"$set": {"status": status, "response_payload": response_payload}},
+        {"$set": {"status": status, "response_payload": response_payload, "updated_at": int(time.time())}},
         return_document=ReturnDocument.AFTER,
     )
     if row is None:

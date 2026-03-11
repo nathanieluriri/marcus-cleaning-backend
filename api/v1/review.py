@@ -124,8 +124,9 @@ async def create_review(
     Creates a new Review.
     """
     # Creates ReviewCreate object which includes date_created/last_updated.
+    payload_dict = payload.model_dump(exclude={"customer_id", "booking_id"})
     new_data = ReviewCreate(
-        **payload.model_dump(),
+        **payload_dict,
         customer_id=access.customer_id,
         booking_id=access.booking_id,
         cleaner_id=access.cleaner_id,

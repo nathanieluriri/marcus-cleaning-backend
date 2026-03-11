@@ -20,6 +20,8 @@ class CustomerBase(BaseModel):
     loginType:LoginType
     email:EmailStr
     password:str | bytes
+    phoneNumber: str | None = None
+    avatarDocumentId: str | None = None
     accountStatus: AccountStatus = AccountStatus.ACTIVE
     permissionList: Optional[PermissionList] = None
     pass
@@ -48,6 +50,10 @@ class CustomerCreate(CustomerBase):
         return self
 class CustomerUpdate(BaseModel):
     # Add other fields here 
+    firstName: str | None = None
+    lastName: str | None = None
+    phoneNumber: str | None = None
+    avatarDocumentId: str | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
 class CustomerOut(CustomerBase):

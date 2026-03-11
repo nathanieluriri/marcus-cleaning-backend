@@ -76,3 +76,15 @@ def test_validate_required_environment_raises_with_missing_and_invalid_values(
     assert "PAYMENT_DEFAULT_PROVIDER must be one of" in message
     assert "EMAIL_PORT must be a positive integer" in message
 
+
+def test_collect_invalid_env_values_rejects_non_positive_payment_reconcile_values(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _set_minimal_valid_env(monkeypatch)
+    monkeypatch.setenv("PAYMENT_RECONCILE_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("PAYMENT_RECONCILE_POLL_LIMIT", "-1")
+
+    invalid = settings_module.collect_invalid_env_values()
+
+    assert "PAYMENT_RECONCILE_POLL_INTERVAL_SECONDS must be a positive integer" in invalid
+    assert "PAYMENT_RECONCILE_POLL_LIMIT must be a positive integer" in invalid

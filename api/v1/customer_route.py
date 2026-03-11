@@ -10,10 +10,14 @@ from schemas.customer_app_contract import (
     AuthSignInRequestContract,
     AuthSignUpRequestContract,
     BookingCreateRequestContract,
+    CustomerProfileEditRequestContract,
     CleanerFiltersContract,
     CleanerReviewFiltersContract,
+    NotificationPreferencesPatchContract,
+    SecurityPreferencesPatchContract,
 )
 from schemas.customer_schema import CustomerLogin, CustomerOut, CustomerRefresh, CustomerSignupRequest
+from schemas.saved_address import SavedAddressCreateRequest, SavedAddressPatchRequest
 from security.booking_access_check import require_customer_principal
 from services.customer_service import (
     add_user,
@@ -24,10 +28,18 @@ from services.customer_service import (
     remove_user,
     retrieve_users,
 )
+from services.saved_address_service import (
+    create_my_saved_address,
+    delete_my_saved_address,
+    list_my_saved_addresses,
+    set_default_saved_address,
+    update_my_saved_address,
+)
 from services.customer_app_contract_service import (
     create_booking_contract,
     delete_notification_contract,
     fetch_customer_home_page,
+    fetch_settings_snapshot_contract,
     get_cleaner_profile_contract,
     list_booking_extras_by_service,
     list_cleaner_reviews_contract,
@@ -38,6 +50,9 @@ from services.customer_app_contract_service import (
     request_password_reset_contract,
     sign_in_customer_contract,
     sign_up_customer_contract,
+    update_notification_preferences_contract,
+    update_security_preferences_contract,
+    update_customer_profile_contract,
 )
 from security.account_status_check import check_user_account_status_and_permissions
 from security.auth import verify_customer_refresh_token
@@ -107,6 +122,18 @@ async def get_my_users(customer: CustomerOut = Depends(check_user_account_status
     return customer
 
 
+@router.patch("/me")
+@document_response(message="Customer profile updated successfully")
+async def update_my_profile(
+    payload: CustomerProfileEditRequestContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_customer_profile_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
 @router.post("/signup")
 @document_response(
     message="Customer created successfully",
@@ -142,6 +169,53 @@ async def refresh_user_tokens(
 async def delete_user_account(customer: CustomerOut = Depends(check_user_account_status_and_permissions)):
     result = await remove_user(user_id=customer.id) # type: ignore
     return result
+
+
+@router.get("/me/addresses")
+@document_response(message="Saved addresses fetched successfully", success_example=[])
+async def list_my_addresses(
+    start: int = Query(default=0, ge=0),
+    stop: int = Query(default=20, gt=0, le=100),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await list_my_saved_addresses(user_id=principal.user_id, start=start, stop=stop)
+
+
+@router.post("/me/addresses", status_code=status.HTTP_201_CREATED)
+@document_response(message="Saved address created successfully", status_code=status.HTTP_201_CREATED)
+async def create_my_address(
+    payload: SavedAddressCreateRequest,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await create_my_saved_address(user_id=principal.user_id, payload=payload)
+
+
+@router.patch("/me/addresses/{address_id}")
+@document_response(message="Saved address updated successfully")
+async def update_my_address(
+    address_id: str = Path(..., description="Saved address identifier"),
+    payload: SavedAddressPatchRequest = ...,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_my_saved_address(user_id=principal.user_id, address_id=address_id, payload=payload)
+
+
+@router.delete("/me/addresses/{address_id}")
+@document_response(message="Saved address deleted successfully")
+async def delete_my_address(
+    address_id: str = Path(..., description="Saved address identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await delete_my_saved_address(user_id=principal.user_id, address_id=address_id)
+
+
+@router.post("/me/addresses/{address_id}/set-default")
+@document_response(message="Default saved address updated successfully")
+async def set_default_my_address(
+    address_id: str = Path(..., description="Saved address identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await set_default_saved_address(user_id=principal.user_id, address_id=address_id)
 
 
 @router.post("/sign-in")
@@ -268,3 +342,35 @@ async def delete_notification(
 ):
     await delete_notification_contract(notification_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@customer_app_router.get("/settings")
+@document_response(message="Settings snapshot fetched successfully")
+async def fetch_settings_snapshot(
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await fetch_settings_snapshot_contract(customer_id=principal.user_id)
+
+
+@customer_app_router.patch("/settings/notifications")
+@document_response(message="Notification preferences updated successfully")
+async def patch_notification_preferences(
+    payload: NotificationPreferencesPatchContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_notification_preferences_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.patch("/settings/security")
+@document_response(message="Security preferences updated successfully")
+async def patch_security_preferences(
+    payload: SecurityPreferencesPatchContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_security_preferences_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )

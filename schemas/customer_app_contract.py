@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class AppActionType(str, Enum):
@@ -69,6 +70,7 @@ class AuthUserContract(BaseModel):
     fullName: str
     email: EmailStr
     phoneNumber: str | None = None
+    avatarUrl: str | None = None
     createdAt: datetime
 
 
@@ -77,6 +79,27 @@ class AuthResponseContract(BaseModel):
     refreshToken: str | None = None
     expiresAt: datetime
     user: AuthUserContract
+
+
+class CustomerProfileEditRequestContract(BaseModel):
+    fullName: str | None = None
+    phoneNumber: str | None = Field(
+        default=None,
+        pattern=r"^\+[1-9]\d{1,14}$",
+    )
+    avatarDocumentId: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CustomerProfileContract(BaseModel):
+    id: str
+    fullName: str
+    email: EmailStr
+    phoneNumber: str | None = None
+    avatarDocumentId: str | None = None
+    avatarUrl: str | None = None
+    createdAt: datetime
 
 
 class LocationItemContract(BaseModel):
@@ -252,6 +275,126 @@ class NotificationItemContract(BaseModel):
 class NotificationListQuery(BaseModel):
     page: int = Field(default=0, ge=0)
     pageSize: int = Field(default=20, ge=1, le=100)
+
+
+class QuietHoursContract(BaseModel):
+    enabled: bool
+    startTime: str
+    endTime: str
+    timezone: str
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("startTime", "endTime")
+    @classmethod
+    def validate_hhmm(cls, value: str) -> str:
+        if len(value) != 5 or value[2] != ":":
+            raise ValueError("time must be in HH:MM format")
+        hour, minute = value.split(":")
+        if not hour.isdigit() or not minute.isdigit():
+            raise ValueError("time must be in HH:MM format")
+        if int(hour) < 0 or int(hour) > 23 or int(minute) < 0 or int(minute) > 59:
+            raise ValueError("time must be in HH:MM format")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except Exception as err:
+            raise ValueError("timezone must be a valid IANA timezone") from err
+        return value
+
+
+class QuietHoursPatchContract(BaseModel):
+    enabled: bool | None = None
+    startTime: str | None = None
+    endTime: str | None = None
+    timezone: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("startTime", "endTime")
+    @classmethod
+    def validate_optional_hhmm(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if len(value) != 5 or value[2] != ":":
+            raise ValueError("time must be in HH:MM format")
+        hour, minute = value.split(":")
+        if not hour.isdigit() or not minute.isdigit():
+            raise ValueError("time must be in HH:MM format")
+        if int(hour) < 0 or int(hour) > 23 or int(minute) < 0 or int(minute) > 59:
+            raise ValueError("time must be in HH:MM format")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_optional_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except Exception as err:
+            raise ValueError("timezone must be a valid IANA timezone") from err
+        return value
+
+
+class NotificationChannelsContract(BaseModel):
+    push: bool
+    email: bool
+    sms: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NotificationChannelsPatchContract(BaseModel):
+    push: bool | None = None
+    email: bool | None = None
+    sms: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NotificationPreferencesContract(BaseModel):
+    enabled: bool
+    channels: NotificationChannelsContract
+    quietHours: QuietHoursContract
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NotificationPreferencesPatchContract(BaseModel):
+    enabled: bool | None = None
+    channels: NotificationChannelsPatchContract | None = None
+    quietHours: QuietHoursPatchContract | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SecurityPreferencesContract(BaseModel):
+    biometricLoginEnabled: bool
+    twoFactorEnabled: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SecurityPreferencesPatchContract(BaseModel):
+    biometricLoginEnabled: bool | None = None
+    twoFactorEnabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SettingsSnapshotContract(BaseModel):
+    notifications: NotificationPreferencesContract
+    privacy: dict[str, Any] = Field(default_factory=dict)
+    security: SecurityPreferencesContract
+    sessions: dict[str, Any] = Field(default_factory=dict)
+    legal: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CleanerFiltersContract(BaseModel):

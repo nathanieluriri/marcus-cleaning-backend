@@ -60,13 +60,28 @@ async def save_place_search_result(
     )
 
 
-@router.get("/search-results")
+@router.get("/search-history")
 @document_response(message="Search history fetched successfully", success_example=[])
 async def list_place_search_results(
     start: int = Query(default=0, ge=0),
     stop: int = Query(default=20, gt=0, le=100),
     principal: AuthPrincipal = Depends(verify_any_token),
 ):
+    return await list_search_results_for_principal(
+        principal=principal,
+        start=start,
+        stop=stop,
+    )
+
+
+@router.get("/search-results")
+@document_response(message="Search history fetched successfully", success_example=[])
+async def list_place_search_results_legacy(
+    start: int = Query(default=0, ge=0),
+    stop: int = Query(default=20, gt=0, le=100),
+    principal: AuthPrincipal = Depends(verify_any_token),
+):
+    # Backward-compatible alias for clients/tests still calling /search-results with GET.
     return await list_search_results_for_principal(
         principal=principal,
         start=start,

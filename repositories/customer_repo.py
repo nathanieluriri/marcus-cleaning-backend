@@ -52,9 +52,10 @@ async def get_users(filter_dict: dict = {},start=0,stop=100) -> List[CustomerOut
             detail=f"An error occurred while fetching customers: {str(e)}"
         )
 async def update_user(filter_dict: dict, user_data: CustomerUpdate) -> CustomerOut:
+    update_payload = user_data.model_dump(exclude_unset=True)
     result = await db.customers.find_one_and_update(
         filter_dict,
-        {"$set": user_data.model_dump()},
+        {"$set": update_payload},
         return_document=ReturnDocument.AFTER
     )
     returnable_result = CustomerOut(**result)

@@ -137,8 +137,19 @@ def apscheduler_heartbeat() -> None:
     redis_client.set("apscheduler:heartbeat", str(time.time()), ex=60)
 
 
+def enqueue_pending_payment_reconciliation() -> None:
+    QueueManager.get_instance().enqueue(
+        "reconcile_pending_payments",
+        {"limit": settings.payment_reconcile_poll_limit},
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    QueueManager.configure(CeleryQueueProvider(celery_app=celery_app))
+    DocumentStorageManager.configure_from_settings()
+    PaymentManager.configure_from_settings()
+
     scheduler.add_job(
         apscheduler_heartbeat,
         trigger=IntervalTrigger(seconds=15),
@@ -146,11 +157,14 @@ async def lifespan(app: FastAPI):
         name="APScheduler Heartbeat",
         replace_existing=True,
     )
+    scheduler.add_job(
+        enqueue_pending_payment_reconciliation,
+        trigger=IntervalTrigger(seconds=settings.payment_reconcile_poll_interval_seconds),
+        id="payment_reconcile_pending",
+        name="Reconcile Pending Payments",
+        replace_existing=True,
+    )
     scheduler.start()
-
-    QueueManager.configure(CeleryQueueProvider(celery_app=celery_app))
-    DocumentStorageManager.configure_from_settings()
-    PaymentManager.configure_from_settings()
     await initialize_places_http_client()
 
     try:

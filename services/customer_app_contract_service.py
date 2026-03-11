@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -13,6 +15,8 @@ from schemas.customer_app_contract import (
     AuthResponseContract,
     AuthSignInRequestContract,
     AuthSignUpRequestContract,
+    CustomerProfileContract,
+    CustomerProfileEditRequestContract,
     AuthUserContract,
     BookingCreateRequestContract,
     BookingCreateResponseContract,
@@ -25,17 +29,192 @@ from schemas.customer_app_contract import (
     CleanerReviewFiltersContract,
     CleanerReviewsPageContract,
     HomePayloadContract,
+    NotificationChannelsContract,
+    NotificationPreferencesContract,
+    NotificationPreferencesPatchContract,
     NotificationTypeContract,
     NotificationItemContract,
+    QuietHoursContract,
+    SecurityPreferencesContract,
+    SecurityPreferencesPatchContract,
+    SettingsSnapshotContract,
 )
-from schemas.customer_schema import CustomerLogin, CustomerSignupRequest
+from schemas.customer_schema import CustomerLogin, CustomerSignupRequest, CustomerUpdate
 from schemas.imports import AddOn, CleaningServices, Duration, Extra
 from security.principal import AuthPrincipal
+from core.storage.manager import DocumentStorageManager
+from repositories.document_repo import get_document_by_id
 from services.booking_service import create_booking_for_customer
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
 from services.cleaner_service import retrieve_users as retrieve_cleaners
-from services.customer_service import add_user, authenticate_user, retrieve_user_by_user_id
+from services.customer_service import add_user, authenticate_user, retrieve_user_by_user_id, update_user_by_id
 from services.review_service import retrieve_reviews
+from services.saved_address_service import list_my_saved_addresses
+
+_E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
+
+
+def _default_notification_preferences() -> NotificationPreferencesContract:
+    return NotificationPreferencesContract(
+        enabled=True,
+        channels=NotificationChannelsContract(
+            push=True,
+            email=True,
+            sms=False,
+        ),
+        quietHours=QuietHoursContract(
+            enabled=False,
+            startTime="22:00",
+            endTime="07:00",
+            timezone="UTC",
+        ),
+    )
+
+
+def _default_security_preferences() -> SecurityPreferencesContract:
+    return SecurityPreferencesContract(
+        biometricLoginEnabled=False,
+        twoFactorEnabled=False,
+    )
+
+
+def _default_settings_snapshot() -> SettingsSnapshotContract:
+    return SettingsSnapshotContract(
+        notifications=_default_notification_preferences(),
+        privacy={},
+        security=_default_security_preferences(),
+        sessions={},
+        legal={},
+    )
+
+
+def _merge_notification_preferences(
+    current: NotificationPreferencesContract,
+    payload: NotificationPreferencesPatchContract,
+) -> NotificationPreferencesContract:
+    merged = current.model_dump()
+    updates = payload.model_dump(exclude_none=True)
+
+    if "enabled" in updates:
+        merged["enabled"] = updates["enabled"]
+
+    channels = updates.get("channels")
+    if isinstance(channels, dict):
+        merged_channels = dict(merged["channels"])
+        merged_channels.update(channels)
+        merged["channels"] = merged_channels
+
+    quiet_hours = updates.get("quietHours")
+    if isinstance(quiet_hours, dict):
+        merged_quiet_hours = dict(merged["quietHours"])
+        merged_quiet_hours.update(quiet_hours)
+        merged["quietHours"] = merged_quiet_hours
+
+    return NotificationPreferencesContract.model_validate(merged)
+
+
+def _merge_security_preferences(
+    current: SecurityPreferencesContract,
+    payload: SecurityPreferencesPatchContract,
+) -> SecurityPreferencesContract:
+    merged = current.model_dump()
+    merged.update(payload.model_dump(exclude_none=True))
+    return SecurityPreferencesContract.model_validate(merged)
+
+
+async def fetch_settings_snapshot_contract(*, customer_id: str) -> SettingsSnapshotContract:
+    defaults = _default_settings_snapshot()
+    try:
+        row = await db.user_settings.find_one({"userId": customer_id})
+    except Exception:
+        row = None
+
+    if not row:
+        return defaults
+
+    try:
+        notifications = NotificationPreferencesContract.model_validate(
+            row.get("notifications") or defaults.notifications.model_dump()
+        )
+    except Exception:
+        notifications = defaults.notifications
+
+    try:
+        security = SecurityPreferencesContract.model_validate(
+            row.get("security") or defaults.security.model_dump()
+        )
+    except Exception:
+        security = defaults.security
+
+    return SettingsSnapshotContract(
+        notifications=notifications,
+        privacy=row.get("privacy") or {},
+        security=security,
+        sessions=row.get("sessions") or {},
+        legal=row.get("legal") or {},
+    )
+
+
+async def update_notification_preferences_contract(
+    *,
+    customer_id: str,
+    payload: NotificationPreferencesPatchContract,
+) -> NotificationPreferencesContract:
+    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id)
+    merged = _merge_notification_preferences(current=current_snapshot.notifications, payload=payload)
+
+    now_epoch = int(time.time())
+    try:
+        await db.user_settings.update_one(
+            {"userId": customer_id},
+            {
+                "$set": {
+                    "userId": customer_id,
+                    "notifications": merged.model_dump(),
+                    "lastUpdated": now_epoch,
+                },
+                "$setOnInsert": {"dateCreated": now_epoch},
+            },
+            upsert=True,
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update notification preferences",
+        ) from err
+
+    return merged
+
+
+async def update_security_preferences_contract(
+    *,
+    customer_id: str,
+    payload: SecurityPreferencesPatchContract,
+) -> SecurityPreferencesContract:
+    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id)
+    merged = _merge_security_preferences(current=current_snapshot.security, payload=payload)
+
+    now_epoch = int(time.time())
+    try:
+        await db.user_settings.update_one(
+            {"userId": customer_id},
+            {
+                "$set": {
+                    "userId": customer_id,
+                    "security": merged.model_dump(),
+                    "lastUpdated": now_epoch,
+                },
+                "$setOnInsert": {"dateCreated": now_epoch},
+            },
+            upsert=True,
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update security preferences",
+        ) from err
+
+    return merged
 
 
 def _utc_now() -> datetime:
@@ -99,7 +278,8 @@ async def sign_in_customer_contract(payload: AuthSignInRequestContract) -> AuthR
         id=str(customer.id),
         fullName=full_name,
         email=customer.email,
-        phoneNumber=None,
+        phoneNumber=customer.phoneNumber,
+        avatarUrl=await _resolve_avatar_url(customer.avatarDocumentId),
         createdAt=_epoch_to_datetime(customer.date_created),
     )
     return AuthResponseContract(
@@ -125,7 +305,8 @@ async def sign_up_customer_contract(payload: AuthSignUpRequestContract) -> AuthR
         id=str(customer.id),
         fullName=full_name,
         email=customer.email,
-        phoneNumber=None,
+        phoneNumber=customer.phoneNumber,
+        avatarUrl=await _resolve_avatar_url(customer.avatarDocumentId),
         createdAt=_epoch_to_datetime(customer.date_created),
     )
     return AuthResponseContract(
@@ -133,6 +314,92 @@ async def sign_up_customer_contract(payload: AuthSignUpRequestContract) -> AuthR
         refreshToken=customer.refresh_token,
         expiresAt=_utc_now() + timedelta(hours=1),
         user=user,
+    )
+
+
+async def _resolve_avatar_url(avatar_document_id: str | None) -> str | None:
+    if not avatar_document_id:
+        return None
+    doc = await get_document_by_id(document_id=avatar_document_id)
+    if doc is None:
+        return None
+    try:
+        provider = DocumentStorageManager.get_instance().provider
+        return provider.download_url(object_key=doc.object_key)
+    except Exception:
+        return None
+
+
+async def update_customer_profile_contract(
+    *,
+    customer_id: str,
+    payload: CustomerProfileEditRequestContract,
+) -> CustomerProfileContract:
+    customer = await retrieve_user_by_user_id(id=customer_id)
+    provided_fields = payload.model_fields_set
+    update_dict: dict[str, str | None] = {}
+
+    if "fullName" in provided_fields:
+        if payload.fullName is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="fullName cannot be null",
+            )
+        normalized = " ".join(payload.fullName.strip().split())
+        if not normalized:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="fullName cannot be empty",
+            )
+        first_name, last_name = _split_full_name(normalized)
+        update_dict["firstName"] = first_name
+        update_dict["lastName"] = last_name
+
+    if "phoneNumber" in provided_fields:
+        if payload.phoneNumber is None:
+            update_dict["phoneNumber"] = None
+        elif not _E164_RE.fullmatch(payload.phoneNumber):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="phoneNumber must be valid E.164 format",
+            )
+        else:
+            update_dict["phoneNumber"] = payload.phoneNumber
+
+    if "avatarDocumentId" in provided_fields:
+        if payload.avatarDocumentId is None:
+            update_dict["avatarDocumentId"] = None
+        else:
+            doc = await get_document_by_id(document_id=payload.avatarDocumentId)
+            if doc is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Avatar document not found",
+                )
+            if doc.owner_id != customer_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You cannot use another user's document as avatar",
+                )
+            update_dict["avatarDocumentId"] = payload.avatarDocumentId
+
+    if not update_dict:
+        updated = customer
+    else:
+        updated = await update_user_by_id(
+            user_id=customer_id,
+            user_data=CustomerUpdate(**update_dict),
+        )
+
+    full_name = _display_name(updated.firstName, updated.lastName)
+    return CustomerProfileContract(
+        id=str(updated.id or customer_id),
+        fullName=full_name,
+        email=updated.email,
+        phoneNumber=updated.phoneNumber,
+        avatarDocumentId=updated.avatarDocumentId,
+        avatarUrl=await _resolve_avatar_url(updated.avatarDocumentId),
+        createdAt=_epoch_to_datetime(updated.date_created),
     )
 
 
@@ -338,17 +605,19 @@ async def fetch_customer_home_page(principal: AuthPrincipal) -> HomePayloadContr
     selected_location = None
 
     try:
-        cursor = db.autocomplete_search_results.find({"user_id": principal.user_id}).limit(5)
-        async for doc in cursor:
-            place = doc.get("place", {})
+        saved_addresses = await list_my_saved_addresses(user_id=principal.user_id, start=0, stop=5)
+        for address in saved_addresses:
+            place = address.place.model_dump() if address.place else {}
             item = {
-                "id": str(doc.get("_id") or place.get("place_id") or "loc_unknown"),
-                "label": place.get("name") or "Saved place",
-                "addressLine": place.get("formatted_address") or place.get("description") or "Address",
-                "hint": "Recently used",
+                "id": str(address.id or place.get("place_id") or "loc_unknown"),
+                "label": address.label or place.get("name") or "Saved place",
+                "addressLine": address.addressLine or place.get("formatted_address") or place.get("description") or "Address",
+                "hint": "Default" if address.isDefault else "Saved",
             }
             locations.append(item)
-        if locations:
+            if address.isDefault and selected_location is None:
+                selected_location = item
+        if locations and selected_location is None:
             selected_location = locations[0]
     except Exception:
         locations = []

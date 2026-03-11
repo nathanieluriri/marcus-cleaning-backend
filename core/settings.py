@@ -100,6 +100,22 @@ def collect_invalid_env_values() -> list[str]:
     if db_type not in {"sqlite", "mongodb"}:
         invalid_values.append("DB_TYPE must be one of: sqlite, mongodb")
 
+    poll_interval_seconds = _env("PAYMENT_RECONCILE_POLL_INTERVAL_SECONDS")
+    if poll_interval_seconds is not None:
+        try:
+            if int(poll_interval_seconds) <= 0:
+                raise ValueError("must be positive")
+        except ValueError:
+            invalid_values.append("PAYMENT_RECONCILE_POLL_INTERVAL_SECONDS must be a positive integer")
+
+    poll_limit = _env("PAYMENT_RECONCILE_POLL_LIMIT")
+    if poll_limit is not None:
+        try:
+            if int(poll_limit) <= 0:
+                raise ValueError("must be positive")
+        except ValueError:
+            invalid_values.append("PAYMENT_RECONCILE_POLL_LIMIT must be a positive integer")
+
     return invalid_values
 
 
@@ -143,6 +159,8 @@ class Settings:
     test_payment_base_url: str | None
     test_payment_webhook_secret_hash: str | None
     booking_allow_accept_on_pending_payment: bool
+    payment_reconcile_poll_interval_seconds: int
+    payment_reconcile_poll_limit: int
 
     @property
     def is_production(self) -> bool:
@@ -186,6 +204,14 @@ def get_settings() -> Settings:
         test_payment_webhook_secret_hash=os.getenv("TEST_PAYMENT_WEBHOOK_SECRET_HASH"),
         booking_allow_accept_on_pending_payment=(
             os.getenv("BOOKING_ALLOW_ACCEPT_ON_PENDING_PAYMENT", "true").lower() in {"1", "true", "yes"}
+        ),
+        payment_reconcile_poll_interval_seconds=max(
+            int(os.getenv("PAYMENT_RECONCILE_POLL_INTERVAL_SECONDS", "120")),
+            1,
+        ),
+        payment_reconcile_poll_limit=max(
+            int(os.getenv("PAYMENT_RECONCILE_POLL_LIMIT", "50")),
+            1,
         ),
     )
 
