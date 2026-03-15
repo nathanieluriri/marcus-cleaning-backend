@@ -33,6 +33,11 @@ class ReviewTimePeriodContract(str, Enum):
     LAST_YEAR = "lastYear"
 
 
+class AccountLifecycleActionContract(str, Enum):
+    DEACTIVATE = "deactivate"
+    DELETE = "delete"
+
+
 class BookingDurationTypeContract(str, Enum):
     PRESET = "preset"
     CUSTOM = "custom"
@@ -387,11 +392,63 @@ class SecurityPreferencesPatchContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SessionControlContract(BaseModel):
+    activeSessionCount: int = Field(ge=0, default=1)
+    revocableSessionCount: int = Field(ge=0, default=0)
+    canRevokeOtherSessions: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PendingAccountLifecycleActionContract(BaseModel):
+    action: AccountLifecycleActionContract
+    effectiveAt: datetime
+    status: str = "pending"
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AccountLifecycleSettingsContract(BaseModel):
+    pendingAction: PendingAccountLifecycleActionContract | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RevokeOtherSessionsResponseContract(BaseModel):
+    revokedAccessSessions: int = Field(ge=0, default=0)
+    revokedRefreshSessions: int = Field(ge=0, default=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AccountDeactivateRequestContract(BaseModel):
+    effectiveAt: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AccountDeleteRequestContract(BaseModel):
+    confirmationText: str = Field(min_length=1)
+    effectiveAt: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AccountLifecycleActionResponseContract(BaseModel):
+    accepted: bool
+    scheduled: bool
+    action: AccountLifecycleActionContract
+    effectiveAt: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SettingsSnapshotContract(BaseModel):
     notifications: NotificationPreferencesContract
     privacy: dict[str, Any] = Field(default_factory=dict)
     security: SecurityPreferencesContract
-    sessions: dict[str, Any] = Field(default_factory=dict)
+    sessions: SessionControlContract = Field(default_factory=SessionControlContract)
+    accountLifecycle: AccountLifecycleSettingsContract = Field(default_factory=AccountLifecycleSettingsContract)
     legal: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")

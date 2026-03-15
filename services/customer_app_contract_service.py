@@ -11,6 +11,11 @@ from fastapi import HTTPException, status
 from core.database import db
 from schemas.booking import BookingBase
 from schemas.customer_app_contract import (
+    AccountDeactivateRequestContract,
+    AccountDeleteRequestContract,
+    AccountLifecycleActionContract,
+    AccountLifecycleActionResponseContract,
+    AccountLifecycleSettingsContract,
     AuthPasswordResetRequestContract,
     AuthResponseContract,
     AuthSignInRequestContract,
@@ -34,24 +39,29 @@ from schemas.customer_app_contract import (
     NotificationPreferencesPatchContract,
     NotificationTypeContract,
     NotificationItemContract,
+    PendingAccountLifecycleActionContract,
     QuietHoursContract,
+    RevokeOtherSessionsResponseContract,
     SecurityPreferencesContract,
     SecurityPreferencesPatchContract,
+    SessionControlContract,
     SettingsSnapshotContract,
 )
 from schemas.customer_schema import CustomerLogin, CustomerSignupRequest, CustomerUpdate
-from schemas.imports import AddOn, CleaningServices, Duration, Extra
+from schemas.imports import AccountStatus, AddOn, CleaningServices, Duration, Extra
 from security.principal import AuthPrincipal
 from core.storage.manager import DocumentStorageManager
 from repositories.document_repo import get_document_by_id
+from repositories.tokens_repo import delete_all_tokens_with_user_id, delete_other_tokens_with_user_id
 from services.booking_service import create_booking_for_customer
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
 from services.cleaner_service import retrieve_users as retrieve_cleaners
-from services.customer_service import add_user, authenticate_user, retrieve_user_by_user_id, update_user_by_id
+from services.customer_service import add_user, authenticate_user, remove_user, retrieve_user_by_user_id, update_user_by_id
 from services.review_service import retrieve_reviews
 from services.saved_address_service import list_my_saved_addresses
 
 _E164_RE = re.compile(r"^\+[1-9]\d{1,14}$")
+_ACCOUNT_DELETE_CONFIRM_TEXT = "DELETE"
 
 
 def _default_notification_preferences() -> NotificationPreferencesContract:
@@ -83,7 +93,8 @@ def _default_settings_snapshot() -> SettingsSnapshotContract:
         notifications=_default_notification_preferences(),
         privacy={},
         security=_default_security_preferences(),
-        sessions={},
+        sessions=SessionControlContract(),
+        accountLifecycle=AccountLifecycleSettingsContract(),
         legal={},
     )
 
@@ -122,6 +133,62 @@ def _merge_security_preferences(
     return SecurityPreferencesContract.model_validate(merged)
 
 
+def _coerce_effective_epoch(effective_at: datetime | None) -> int:
+    if effective_at is None:
+        return int(time.time())
+    if effective_at.tzinfo is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="effectiveAt must include timezone",
+        )
+    return int(effective_at.timestamp())
+
+
+def _is_scheduled(effective_epoch: int) -> bool:
+    return effective_epoch > int(time.time())
+
+
+async def _find_pending_account_action(customer_id: str) -> PendingAccountLifecycleActionContract | None:
+    try:
+        row = await db.account_lifecycle_jobs.find_one(
+            {
+                "userId": customer_id,
+                "status": "pending",
+            },
+            sort=[("effectiveAt", 1)],
+        )
+    except Exception:
+        return None
+
+    if not row:
+        return None
+
+    action_value = str(row.get("action") or AccountLifecycleActionContract.DEACTIVATE.value)
+    action = (
+        AccountLifecycleActionContract(action_value)
+        if action_value in {value.value for value in AccountLifecycleActionContract}
+        else AccountLifecycleActionContract.DEACTIVATE
+    )
+    return PendingAccountLifecycleActionContract(
+        action=action,
+        effectiveAt=_epoch_to_datetime(int(row.get("effectiveAt") or time.time())),
+        status=str(row.get("status") or "pending"),
+    )
+
+
+async def _build_session_control(customer_id: str) -> SessionControlContract:
+    try:
+        active_count = await db.accessToken.count_documents({"userId": customer_id})
+    except Exception:
+        active_count = 1
+    revocable = max(int(active_count) - 1, 0)
+    return SessionControlContract(
+        activeSessionCount=int(active_count),
+        revocableSessionCount=revocable,
+        canRevokeOtherSessions=revocable > 0,
+    )
+
+
 async def fetch_settings_snapshot_contract(*, customer_id: str) -> SettingsSnapshotContract:
     defaults = _default_settings_snapshot()
     try:
@@ -146,11 +213,16 @@ async def fetch_settings_snapshot_contract(*, customer_id: str) -> SettingsSnaps
     except Exception:
         security = defaults.security
 
+    sessions = await _build_session_control(customer_id)
+    pending_action = await _find_pending_account_action(customer_id)
+    account_lifecycle = AccountLifecycleSettingsContract(pendingAction=pending_action)
+
     return SettingsSnapshotContract(
         notifications=notifications,
         privacy=row.get("privacy") or {},
         security=security,
-        sessions=row.get("sessions") or {},
+        sessions=sessions,
+        accountLifecycle=account_lifecycle,
         legal=row.get("legal") or {},
     )
 
@@ -184,6 +256,175 @@ async def update_notification_preferences_contract(
         ) from err
 
     return merged
+
+
+async def revoke_other_sessions_contract(
+    *,
+    customer_id: str,
+    current_access_token_id: str,
+) -> RevokeOtherSessionsResponseContract:
+    access_deleted, refresh_deleted = await delete_other_tokens_with_user_id(
+        user_id=customer_id,
+        current_access_token_id=current_access_token_id,
+    )
+    return RevokeOtherSessionsResponseContract(
+        revokedAccessSessions=access_deleted,
+        revokedRefreshSessions=refresh_deleted,
+    )
+
+
+async def _create_lifecycle_job(
+    *,
+    customer_id: str,
+    action: AccountLifecycleActionContract,
+    effective_epoch: int,
+) -> None:
+    existing = await _find_pending_account_action(customer_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A pending account lifecycle action already exists",
+        )
+    await db.account_lifecycle_jobs.insert_one(
+        {
+            "userId": customer_id,
+            "role": "customer",
+            "action": action.value,
+            "effectiveAt": effective_epoch,
+            "status": "pending",
+            "createdAt": int(time.time()),
+        }
+    )
+
+
+async def _apply_customer_deactivation(customer_id: str) -> None:
+    if not ObjectId.is_valid(customer_id):
+        raise HTTPException(status_code=400, detail="Invalid customer ID format")
+    result = await db.customers.update_one(
+        {"_id": ObjectId(customer_id)},
+        {
+            "$set": {
+                "accountStatus": AccountStatus.INACTIVE.value,
+                "last_updated": int(time.time()),
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    await delete_all_tokens_with_user_id(userId=customer_id)
+
+
+async def request_account_deactivation_contract(
+    *,
+    customer_id: str,
+    payload: AccountDeactivateRequestContract,
+) -> AccountLifecycleActionResponseContract:
+    effective_epoch = _coerce_effective_epoch(payload.effectiveAt)
+    if _is_scheduled(effective_epoch):
+        await _create_lifecycle_job(
+            customer_id=customer_id,
+            action=AccountLifecycleActionContract.DEACTIVATE,
+            effective_epoch=effective_epoch,
+        )
+        return AccountLifecycleActionResponseContract(
+            accepted=True,
+            scheduled=True,
+            action=AccountLifecycleActionContract.DEACTIVATE,
+            effectiveAt=_epoch_to_datetime(effective_epoch),
+        )
+
+    await _apply_customer_deactivation(customer_id)
+    return AccountLifecycleActionResponseContract(
+        accepted=True,
+        scheduled=False,
+        action=AccountLifecycleActionContract.DEACTIVATE,
+        effectiveAt=_epoch_to_datetime(effective_epoch),
+    )
+
+
+async def request_account_deletion_contract(
+    *,
+    customer_id: str,
+    payload: AccountDeleteRequestContract,
+) -> AccountLifecycleActionResponseContract:
+    if payload.confirmationText != _ACCOUNT_DELETE_CONFIRM_TEXT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"confirmationText must equal '{_ACCOUNT_DELETE_CONFIRM_TEXT}'",
+        )
+
+    effective_epoch = _coerce_effective_epoch(payload.effectiveAt)
+    if _is_scheduled(effective_epoch):
+        await _create_lifecycle_job(
+            customer_id=customer_id,
+            action=AccountLifecycleActionContract.DELETE,
+            effective_epoch=effective_epoch,
+        )
+        return AccountLifecycleActionResponseContract(
+            accepted=True,
+            scheduled=True,
+            action=AccountLifecycleActionContract.DELETE,
+            effectiveAt=_epoch_to_datetime(effective_epoch),
+        )
+
+    await remove_user(user_id=customer_id)
+    return AccountLifecycleActionResponseContract(
+        accepted=True,
+        scheduled=False,
+        action=AccountLifecycleActionContract.DELETE,
+        effectiveAt=_epoch_to_datetime(effective_epoch),
+    )
+
+
+async def process_due_account_lifecycle_jobs(*, limit: int = 100) -> None:
+    now_epoch = int(time.time())
+    try:
+        cursor = db.account_lifecycle_jobs.find(
+            {"status": "pending", "effectiveAt": {"$lte": now_epoch}}
+        ).limit(limit)
+    except Exception:
+        return None
+
+    async for row in cursor:
+        job_id = row.get("_id")
+        if not job_id:
+            continue
+        try:
+            claimed = await db.account_lifecycle_jobs.find_one_and_update(
+                {"_id": job_id, "status": "pending"},
+                {"$set": {"status": "processing", "startedAt": now_epoch}},
+                return_document=True,
+            )
+            if not claimed:
+                continue
+
+            action = str(claimed.get("action") or "")
+            user_id = str(claimed.get("userId") or "")
+            if not user_id:
+                raise ValueError("missing userId")
+
+            if action == AccountLifecycleActionContract.DEACTIVATE.value:
+                await _apply_customer_deactivation(user_id)
+            elif action == AccountLifecycleActionContract.DELETE.value:
+                await remove_user(user_id=user_id)
+            else:
+                raise ValueError(f"unsupported lifecycle action: {action}")
+
+            await db.account_lifecycle_jobs.update_one(
+                {"_id": job_id},
+                {"$set": {"status": "completed", "completedAt": int(time.time())}},
+            )
+        except Exception as err:
+            await db.account_lifecycle_jobs.update_one(
+                {"_id": job_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": str(err),
+                        "failedAt": int(time.time()),
+                    }
+                },
+            )
 
 
 async def update_security_preferences_contract(

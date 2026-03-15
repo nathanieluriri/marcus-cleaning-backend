@@ -222,3 +222,27 @@ async def delete_all_tokens_with_user_id(userId: str):
 async def delete_all_tokens_with_admin_id(adminId: str):
     await db.refreshToken.delete_many(filter={"userId": adminId})
     await db.accessToken.delete_many(filter={"userId": adminId})
+
+
+async def delete_other_tokens_with_user_id(
+    *,
+    user_id: str,
+    current_access_token_id: str,
+) -> tuple[int, int]:
+    try:
+        current_object_id = ObjectId(current_access_token_id)
+        access_filter: dict[str, object] = {
+            "userId": user_id,
+            "_id": {"$ne": current_object_id},
+        }
+    except errors.InvalidId:
+        access_filter = {"userId": user_id}
+
+    refresh_filter = {
+        "userId": user_id,
+        "previousAccessToken": {"$ne": current_access_token_id},
+    }
+
+    access_result = await db.accessToken.delete_many(filter=access_filter)
+    refresh_result = await db.refreshToken.delete_many(filter=refresh_filter)
+    return access_result.deleted_count, refresh_result.deleted_count

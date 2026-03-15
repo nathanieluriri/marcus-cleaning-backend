@@ -37,6 +37,7 @@ from core.settings import get_settings
 from core.role_config import build_role_rate_limits, build_role_rate_limits_csv, normalize_role
 from core.storage.manager import DocumentStorageManager
 from repositories.tokens_repo import get_access_token_allow_expired
+from services.customer_app_contract_service import process_due_account_lifecycle_jobs
 from services.place_service import initialize_places_http_client, shutdown_places_http_client
 
 settings = get_settings()
@@ -144,6 +145,10 @@ def enqueue_pending_payment_reconciliation() -> None:
     )
 
 
+async def process_pending_account_lifecycle_jobs() -> None:
+    await process_due_account_lifecycle_jobs(limit=100)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     QueueManager.configure(CeleryQueueProvider(celery_app=celery_app))
@@ -162,6 +167,13 @@ async def lifespan(app: FastAPI):
         trigger=IntervalTrigger(seconds=settings.payment_reconcile_poll_interval_seconds),
         id="payment_reconcile_pending",
         name="Reconcile Pending Payments",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        process_pending_account_lifecycle_jobs,
+        trigger=IntervalTrigger(seconds=60),
+        id="account_lifecycle_processor",
+        name="Process Account Lifecycle Jobs",
         replace_existing=True,
     )
     scheduler.start()

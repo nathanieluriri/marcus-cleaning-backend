@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
-from schemas.customer_app_contract import NotificationPreferencesPatchContract, SecurityPreferencesPatchContract
+from schemas.customer_app_contract import (
+    AccountDeactivateRequestContract,
+    AccountDeleteRequestContract,
+    NotificationPreferencesPatchContract,
+    SecurityPreferencesPatchContract,
+)
 from services import customer_app_contract_service
 
 
@@ -143,3 +150,59 @@ async def test_update_security_preferences_contract_merges_partial(monkeypatch: 
     assert upsert is True
     assert "security" in update_doc["$set"]
     assert "notifications" not in update_doc["$set"]
+
+
+@pytest.mark.asyncio
+async def test_revoke_other_sessions_contract_returns_deleted_counts(monkeypatch: pytest.MonkeyPatch):
+    async def _stub_delete_other_tokens_with_user_id(*, user_id: str, current_access_token_id: str):
+        assert user_id == "customer-123"
+        assert current_access_token_id == "access-123"
+        return 3, 2
+
+    monkeypatch.setattr(
+        customer_app_contract_service,
+        "delete_other_tokens_with_user_id",
+        _stub_delete_other_tokens_with_user_id,
+    )
+
+    result = await customer_app_contract_service.revoke_other_sessions_contract(
+        customer_id="customer-123",
+        current_access_token_id="access-123",
+    )
+
+    assert result.revokedAccessSessions == 3
+    assert result.revokedRefreshSessions == 2
+
+
+@pytest.mark.asyncio
+async def test_request_account_deactivation_contract_schedules_future_action(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    async def _stub_create_lifecycle_job(*, customer_id: str, action, effective_epoch: int):
+        captured["customer_id"] = customer_id
+        captured["action"] = action.value
+        captured["effective_epoch"] = effective_epoch
+
+    monkeypatch.setattr(customer_app_contract_service, "_create_lifecycle_job", _stub_create_lifecycle_job)
+
+    effective_at = datetime.now(timezone.utc) + timedelta(hours=3)
+    result = await customer_app_contract_service.request_account_deactivation_contract(
+        customer_id="customer-123",
+        payload=AccountDeactivateRequestContract(effectiveAt=effective_at),
+    )
+
+    assert captured["customer_id"] == "customer-123"
+    assert captured["action"] == "deactivate"
+    assert result.accepted is True
+    assert result.scheduled is True
+    assert result.action.value == "deactivate"
+
+
+@pytest.mark.asyncio
+async def test_request_account_deletion_contract_rejects_invalid_confirmation_text():
+    with pytest.raises(HTTPException) as exc_info:
+        await customer_app_contract_service.request_account_deletion_contract(
+            customer_id="customer-123",
+            payload=AccountDeleteRequestContract(confirmationText="delete"),
+        )
+    assert exc_info.value.status_code == 422

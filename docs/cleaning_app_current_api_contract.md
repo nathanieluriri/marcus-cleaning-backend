@@ -203,7 +203,14 @@ Error responses follow the backend error envelope:
     "biometricLoginEnabled": false,
     "twoFactorEnabled": false
   },
-  "sessions": {},
+  "sessions": {
+    "activeSessionCount": 1,
+    "revocableSessionCount": 0,
+    "canRevokeOtherSessions": false
+  },
+  "accountLifecycle": {
+    "pendingAction": null
+  },
   "legal": {}
 }
 ```
@@ -219,6 +226,29 @@ Error responses follow the backend error envelope:
 - Path: `/v1/settings/security`
 - Request body: partial security preference payload (supports `biometricLoginEnabled`, `twoFactorEnabled`).
 - Response `200` (`data`): updated `security` preference object.
+
+### Revoke Other Sessions
+- Method: `POST`
+- Path: `/v1/settings/sessions/revoke-others`
+- Response `200` (`data`):
+```json
+{
+  "revokedAccessSessions": 2,
+  "revokedRefreshSessions": 2
+}
+```
+
+### Request Account Deactivation
+- Method: `POST`
+- Path: `/v1/settings/account/deactivate`
+- Request body: `{ "effectiveAt": "2026-12-01T10:00:00Z" }` (`effectiveAt` optional; absent means immediate).
+- Response `200` (`data`): lifecycle action acceptance (`accepted`, `scheduled`, `action`, `effectiveAt`).
+
+### Request Account Deletion
+- Method: `POST`
+- Path: `/v1/settings/account/delete`
+- Request body: `{ "confirmationText": "DELETE", "effectiveAt": "2026-12-01T10:00:00Z" }` (`effectiveAt` optional).
+- Response `200` (`data`): lifecycle action acceptance (`accepted`, `scheduled`, `action`, `effectiveAt`).
 
 ## Auth Header Contract
 

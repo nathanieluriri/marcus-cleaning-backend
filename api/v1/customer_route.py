@@ -6,6 +6,8 @@ from fastapi.responses import RedirectResponse, Response
 
 from core.response_envelope import document_response
 from schemas.customer_app_contract import (
+    AccountDeactivateRequestContract,
+    AccountDeleteRequestContract,
     AuthPasswordResetRequestContract,
     AuthSignInRequestContract,
     AuthSignUpRequestContract,
@@ -48,6 +50,9 @@ from services.customer_app_contract_service import (
     mark_all_notifications_as_read_contract,
     mark_notification_as_read_contract,
     request_password_reset_contract,
+    request_account_deactivation_contract,
+    request_account_deletion_contract,
+    revoke_other_sessions_contract,
     sign_in_customer_contract,
     sign_up_customer_contract,
     update_notification_preferences_contract,
@@ -371,6 +376,41 @@ async def patch_security_preferences(
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):
     return await update_security_preferences_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.post("/settings/sessions/revoke-others")
+@document_response(message="Other sessions revoked successfully")
+async def revoke_other_sessions(
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await revoke_other_sessions_contract(
+        customer_id=principal.user_id,
+        current_access_token_id=principal.access_token_id,
+    )
+
+
+@customer_app_router.post("/settings/account/deactivate")
+@document_response(message="Account deactivation request accepted")
+async def request_account_deactivation(
+    payload: AccountDeactivateRequestContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await request_account_deactivation_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.post("/settings/account/delete")
+@document_response(message="Account deletion request accepted")
+async def request_account_deletion(
+    payload: AccountDeleteRequestContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await request_account_deletion_contract(
         customer_id=principal.user_id,
         payload=payload,
     )

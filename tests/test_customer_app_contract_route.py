@@ -355,6 +355,94 @@ def test_patch_security_preferences_rejects_invalid_boolean_payload():
     assert response.status_code == 422
 
 
+def test_revoke_other_sessions_contract(monkeypatch):
+    async def _stub_revoke_other_sessions_contract(*, customer_id: str, current_access_token_id: str):
+        assert customer_id == "customer-123"
+        assert current_access_token_id == "access-123"
+        return {"revokedAccessSessions": 2, "revokedRefreshSessions": 2}
+
+    monkeypatch.setattr(
+        customer_route,
+        "revoke_other_sessions_contract",
+        _stub_revoke_other_sessions_contract,
+    )
+
+    client = TestClient(_build_app())
+    response = client.post("/v1/settings/sessions/revoke-others")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["revokedAccessSessions"] == 2
+
+
+def test_request_account_deactivation_contract(monkeypatch):
+    async def _stub_request_account_deactivation_contract(*, customer_id: str, payload):
+        assert customer_id == "customer-123"
+        assert payload.effectiveAt is not None
+        return {
+            "accepted": True,
+            "scheduled": True,
+            "action": "deactivate",
+            "effectiveAt": payload.effectiveAt.isoformat(),
+        }
+
+    monkeypatch.setattr(
+        customer_route,
+        "request_account_deactivation_contract",
+        _stub_request_account_deactivation_contract,
+    )
+
+    client = TestClient(_build_app())
+    response = client.post(
+        "/v1/settings/account/deactivate",
+        json={"effectiveAt": "2026-12-01T10:00:00Z"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["scheduled"] is True
+
+
+def test_request_account_deletion_contract(monkeypatch):
+    async def _stub_request_account_deletion_contract(*, customer_id: str, payload):
+        assert customer_id == "customer-123"
+        assert payload.confirmationText == "DELETE"
+        return {
+            "accepted": True,
+            "scheduled": False,
+            "action": "delete",
+            "effectiveAt": "2026-03-11T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(
+        customer_route,
+        "request_account_deletion_contract",
+        _stub_request_account_deletion_contract,
+    )
+
+    client = TestClient(_build_app())
+    response = client.post(
+        "/v1/settings/account/delete",
+        json={"confirmationText": "DELETE"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["action"] == "delete"
+
+
+def test_request_account_deletion_rejects_wrong_confirmation_text():
+    client = TestClient(_build_app())
+    response = client.post(
+        "/v1/settings/account/delete",
+        json={"confirmationText": "delete"},
+    )
+    assert response.status_code == 422
+
+
 def test_legacy_and_contract_auth_routes_coexist(monkeypatch):
     async def _stub_legacy_login(user_data):
         _ = user_data
