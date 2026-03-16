@@ -6,7 +6,9 @@ from functools import lru_cache
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# In production, secrets must come from the runtime environment/secret manager.
+if os.getenv("ENV", "development").lower() != "production":
+    load_dotenv()
 
 SUPPORTED_PAYMENT_PROVIDERS = {"flutterwave", "stripe", "test"}
 
@@ -42,6 +44,12 @@ def collect_missing_required_env_vars() -> list[str]:
         "EMAIL_PORT",
         "CELERY_BROKER_URL",
         "CELERY_RESULT_BACKEND",
+        "AUTH0_DOMAIN",
+        "AUTH0_ISSUER",
+        "AUTH0_AUDIENCE",
+        "AUTH0_CLIENT_ID",
+        "AUTH0_CLIENT_SECRET",
+        "AUTH0_DB_CONNECTION",
     )
     for var_name in always_required:
         if _env(var_name) is None:
@@ -161,6 +169,24 @@ class Settings:
     booking_allow_accept_on_pending_payment: bool
     payment_reconcile_poll_interval_seconds: int
     payment_reconcile_poll_limit: int
+    auth0_domain: str | None
+    auth0_issuer: str | None
+    auth0_audience: str | None
+    auth0_client_id: str | None
+    auth0_client_secret: str | None
+    auth0_db_connection: str | None
+    auth0_allowed_azp: tuple[str, ...]
+    auth0_http_timeout_seconds: int
+    auth0_jwks_cache_ttl_seconds: int
+    auth0_revoke_sessions_enabled: bool
+    auth0_management_client_id: str | None
+    auth0_management_client_secret: str | None
+    auth_session_max_age_admin_seconds: int
+    auth_session_max_age_cleaner_seconds: int
+    auth_session_max_age_customer_seconds: int
+    auth_session_idle_timeout_admin_seconds: int
+    auth_session_idle_timeout_cleaner_seconds: int
+    auth_session_idle_timeout_customer_seconds: int
 
     @property
     def is_production(self) -> bool:
@@ -212,6 +238,31 @@ def get_settings() -> Settings:
         payment_reconcile_poll_limit=max(
             int(os.getenv("PAYMENT_RECONCILE_POLL_LIMIT", "50")),
             1,
+        ),
+        auth0_domain=_env("AUTH0_DOMAIN"),
+        auth0_issuer=_env("AUTH0_ISSUER"),
+        auth0_audience=_env("AUTH0_AUDIENCE"),
+        auth0_client_id=_env("AUTH0_CLIENT_ID"),
+        auth0_client_secret=_env("AUTH0_CLIENT_SECRET"),
+        auth0_db_connection=_env("AUTH0_DB_CONNECTION"),
+        auth0_allowed_azp=_split_csv(os.getenv("AUTH0_ALLOWED_AZP")),
+        auth0_http_timeout_seconds=max(int(os.getenv("AUTH0_HTTP_TIMEOUT_SECONDS", "5")), 1),
+        auth0_jwks_cache_ttl_seconds=max(int(os.getenv("AUTH0_JWKS_CACHE_TTL_SECONDS", "300")), 30),
+        auth0_revoke_sessions_enabled=os.getenv("AUTH0_REVOKE_SESSIONS_ENABLED", "false").lower()
+        in {"1", "true", "yes"},
+        auth0_management_client_id=_env("AUTH0_MGMT_CLIENT_ID"),
+        auth0_management_client_secret=_env("AUTH0_MGMT_CLIENT_SECRET"),
+        auth_session_max_age_admin_seconds=max(int(os.getenv("AUTH_SESSION_MAX_AGE_ADMIN_SECONDS", "43200")), 1),
+        auth_session_max_age_cleaner_seconds=max(int(os.getenv("AUTH_SESSION_MAX_AGE_CLEANER_SECONDS", "43200")), 1),
+        auth_session_max_age_customer_seconds=max(int(os.getenv("AUTH_SESSION_MAX_AGE_CUSTOMER_SECONDS", "43200")), 1),
+        auth_session_idle_timeout_admin_seconds=max(
+            int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_ADMIN_SECONDS", "7200")), 1
+        ),
+        auth_session_idle_timeout_cleaner_seconds=max(
+            int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_CLEANER_SECONDS", "7200")), 1
+        ),
+        auth_session_idle_timeout_customer_seconds=max(
+            int(os.getenv("AUTH_SESSION_IDLE_TIMEOUT_CUSTOMER_SECONDS", "7200")), 1
         ),
     )
 

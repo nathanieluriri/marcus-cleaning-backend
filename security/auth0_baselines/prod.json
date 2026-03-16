@@ -1,0 +1,15 @@
+{
+  "tenant_settings": {
+    "flags.universal_login": true
+  },
+  "brute_force": {
+    "enabled": true
+  },
+  "suspicious_ip_throttling": {
+    "enabled": true
+  },
+  "breached_password": {
+    "enabled": true
+  },
+  "guardian_enabled_factors": ["otp", "push-notification"]
+}

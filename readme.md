@@ -65,16 +65,20 @@ Then update `.env` (see required variables below).
 ### 4) Start API
 
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 7860
+# Development server
+fastapi dev main.py
+# Basic Production server
+fastapi run main.py
 ```
 
 Open:
+<!-- Depending on the port normally its port 8000 -->
 
 - Swagger UI: `http://localhost:7860/docs`
 - ReDoc: `http://localhost:7860/redoc`
 - Health: `http://localhost:7860/health`
 
-### 5) Optional background services
+### 5) background services
 
 Run Celery worker:
 
@@ -191,6 +195,13 @@ Mounted routers in `main.py`:
 
 - Auth uses Bearer tokens resolved to an `AuthPrincipal`.
 - Role checks are enforced per endpoint (`customer`, `cleaner`, `admin`).
+- Role-based session policy is enforced during token verification:
+  - `AUTH_SESSION_MAX_AGE_ADMIN_SECONDS`
+  - `AUTH_SESSION_MAX_AGE_CLEANER_SECONDS`
+  - `AUTH_SESSION_MAX_AGE_CUSTOMER_SECONDS`
+  - `AUTH_SESSION_IDLE_TIMEOUT_ADMIN_SECONDS`
+  - `AUTH_SESSION_IDLE_TIMEOUT_CLEANER_SECONDS`
+  - `AUTH_SESSION_IDLE_TIMEOUT_CUSTOMER_SECONDS`
 - Non-admin accounts also require:
   - `accountStatus == ACTIVE`
   - matching route permission key in `permissionList`
@@ -236,6 +247,9 @@ Test files are in `tests/` (payments, bookings, permissions, places, queue, sett
 
 ## Additional Docs
 
-- `docs/admin_permission_catalog.md`
-- `docs/place_autocomplete.md`
-- `docs/test_environment_provider_changes.md`
+- `docs/auth0_tenant_baseline.md`
+- `docs/runbooks/auth_incident_response.md`
+- `docs/runbooks/auth0_outage_and_key_rotation.md`
+- `docs/runbooks/compliance_export_validation.md`
+- `docs/release_auth_cutover_gate.md`
+- `docs/drills/auth_drill_report_template.md`

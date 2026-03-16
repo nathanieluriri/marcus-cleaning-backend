@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from importlib import import_module
 from typing import Final
@@ -13,6 +14,7 @@ from security.cleaner_onboarding_check import enforce_cleaner_onboarding_gate
 from security.permissions import make_permission_key
 from security.principal import AuthPrincipal
 from services.admin_service import retrieve_admin_by_admin_id
+from services.admin_monitoring_service import log_admin_permission_denied
 
 SUPER_ADMIN_STATIC_ID: Final[str] = "656f7ac12b9d4f6c9e2b9f7d"
 SUPER_ADMIN_EMAIL: Final[str] = (os.getenv("SUPER_ADMIN_EMAIL") or "").strip().lower()
@@ -123,6 +125,14 @@ async def _check_non_admin_account_status_and_permissions(
         endpoint_name=endpoint_name,
         request_method=request_method,
     ):
+        asyncio.create_task(
+            log_admin_permission_denied(
+                request=request,
+                admin_id=principal.user_id,
+                admin_email=getattr(account, "email", None),
+                permission_key=permission_key,
+            )
+        )
         raise auth_permission_denied(permission_key)
 
     if role == "cleaner":

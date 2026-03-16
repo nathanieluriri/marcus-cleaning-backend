@@ -12,6 +12,10 @@ class AdminBase(BaseModel):
     password: str | bytes
     accountStatus: AccountStatus = AccountStatus.ACTIVE
     permissionList: Optional[PermissionList] = None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool = False
+    last_auth_at: int | None = None
 
 
 class AdminLogin(BaseModel):
@@ -37,6 +41,10 @@ class AdminCreate(AdminBase):
 class AdminUpdate(BaseModel):
     # Add other fields here 
     password:Optional[str | bytes]=None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool | None = None
+    last_auth_at: int | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
     @model_validator(mode='after') # type: ignore
     def obscure_password(self):

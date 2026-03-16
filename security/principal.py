@@ -10,6 +10,9 @@ class AuthPrincipal(BaseModel):
     role: Literal['cleaner', 'customer', 'admin']
     access_token_id: str
     jwt_token: str
+    auth_subject: str | None = None
+    auth_provider: str = "auth0"
+    scopes: tuple[str, ...] = ()
     token_created_at: int | None = None
     allow_expired: bool = False
 

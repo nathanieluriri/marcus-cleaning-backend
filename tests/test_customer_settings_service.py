@@ -153,16 +153,56 @@ async def test_update_security_preferences_contract_merges_partial(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_update_security_preferences_contract_skips_session_lookup(monkeypatch: pytest.MonkeyPatch):
+    fake_collection = _FakeUserSettingsCollection(
+        row={
+            "userId": "customer-123",
+            "notifications": {
+                "enabled": True,
+                "channels": {"push": True, "email": True, "sms": False},
+                "quietHours": {
+                    "enabled": False,
+                    "startTime": "22:00",
+                    "endTime": "07:00",
+                    "timezone": "UTC",
+                },
+            },
+            "privacy": {},
+            "security": {"biometricLoginEnabled": False, "twoFactorEnabled": False},
+            "sessions": {},
+            "legal": {},
+        }
+    )
+    monkeypatch.setattr(
+        customer_app_contract_service,
+        "db",
+        SimpleNamespace(user_settings=fake_collection),
+    )
+
+    async def _raise_if_called(*_args, **_kwargs):
+        raise RuntimeError("session lookup should be skipped for security preferences update")
+
+    monkeypatch.setattr(customer_app_contract_service, "_build_session_control", _raise_if_called)
+
+    result = await customer_app_contract_service.update_security_preferences_contract(
+        customer_id="customer-123",
+        payload=SecurityPreferencesPatchContract(twoFactorEnabled=True),
+    )
+
+    assert result.twoFactorEnabled is True
+
+
+@pytest.mark.asyncio
 async def test_revoke_other_sessions_contract_returns_deleted_counts(monkeypatch: pytest.MonkeyPatch):
-    async def _stub_delete_other_tokens_with_user_id(*, user_id: str, current_access_token_id: str):
+    async def _stub_revoke_other_sessions(*, user_id: str, current_access_token_id: str):
         assert user_id == "customer-123"
         assert current_access_token_id == "access-123"
         return 3, 2
 
     monkeypatch.setattr(
         customer_app_contract_service,
-        "delete_other_tokens_with_user_id",
-        _stub_delete_other_tokens_with_user_id,
+        "revoke_other_sessions",
+        _stub_revoke_other_sessions,
     )
 
     result = await customer_app_contract_service.revoke_other_sessions_contract(

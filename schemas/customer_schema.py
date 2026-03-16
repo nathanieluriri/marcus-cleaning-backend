@@ -24,6 +24,10 @@ class CustomerBase(BaseModel):
     avatarDocumentId: str | None = None
     accountStatus: AccountStatus = AccountStatus.ACTIVE
     permissionList: Optional[PermissionList] = None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool = False
+    last_auth_at: int | None = None
     pass
 
 
@@ -54,6 +58,10 @@ class CustomerUpdate(BaseModel):
     lastName: str | None = None
     phoneNumber: str | None = None
     avatarDocumentId: str | None = None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool | None = None
+    last_auth_at: int | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
 class CustomerOut(CustomerBase):

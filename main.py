@@ -36,7 +36,8 @@ from core.scheduler import scheduler
 from core.settings import get_settings
 from core.role_config import build_role_rate_limits, build_role_rate_limits_csv, normalize_role
 from core.storage.manager import DocumentStorageManager
-from repositories.tokens_repo import get_access_token_allow_expired
+from security.auth0_verifier import get_auth0_token_verifier
+from services.auth_identity_service import resolve_any_role_account_for_claims
 from services.customer_app_contract_service import process_due_account_lifecycle_jobs
 from services.place_service import initialize_places_http_client, shutdown_places_http_client
 
@@ -77,21 +78,26 @@ limiter = FixedWindowRateLimiter(storage)
 
 async def get_user_type(request: Request) -> tuple[str, str]:
     auth_header = request.headers.get("Authorization")
-    fallback_id = request.headers.get("X-Forwarded-For") or request.client.host
+    fallback_id = request.headers.get("X-Forwarded-For") or request.client.host # type: ignore
 
     if not auth_header or not auth_header.startswith("Bearer "):
         return fallback_id, "anonymous"
 
     token = auth_header.split(" ", maxsplit=1)[1]
-    access_token = await get_access_token_allow_expired(accessToken=token)
-    if not access_token:
+    try:
+        claims = await get_auth0_token_verifier().verify_access_token(token)
+        role, account = await resolve_any_role_account_for_claims(claims=claims)
+    except Exception:
         return fallback_id, "anonymous"
 
-    user_type = normalize_role(access_token.role or "anonymous")
+    if not role or not account:
+        return fallback_id, "anonymous"
+
+    user_type = normalize_role(role or "anonymous")
     if user_type not in RATE_LIMITS:
         user_type = "anonymous"
 
-    return access_token.userId, user_type
+    return str(getattr(account, "id", fallback_id) or fallback_id), user_type
 
 
 class RateLimitingMiddleware(BaseHTTPMiddleware):
@@ -211,7 +217,7 @@ async def custom_validation_exception_handler(request: Request, exc: RequestVali
     return error_response(
         status_code=422,
         message="Validation error",
-        data={"code": "VALIDATION_FAILED", "details": format_validation_error_details(exc.errors())},
+        data={"code": "VALIDATION_FAILED", "details": format_validation_error_details(exc.errors())}, # type: ignore
         request_id=getattr(request.state, "request_id", None),
     )
 
@@ -280,7 +286,7 @@ async def health_check():
 
     aps_heartbeat = redis_client.get("apscheduler:heartbeat")
     if aps_heartbeat:
-        age = time.time() - float(aps_heartbeat)
+        age = time.time() - float(aps_heartbeat) # type: ignore
         services["apscheduler"] = {
             "status": "healthy" if age <= 30 else "degraded",
             "latency_ms": 0,

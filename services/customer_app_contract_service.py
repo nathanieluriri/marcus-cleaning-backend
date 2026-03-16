@@ -52,7 +52,7 @@ from schemas.imports import AccountStatus, AddOn, CleaningServices, Duration, Ex
 from security.principal import AuthPrincipal
 from core.storage.manager import DocumentStorageManager
 from repositories.document_repo import get_document_by_id
-from repositories.tokens_repo import delete_all_tokens_with_user_id, delete_other_tokens_with_user_id
+from services.auth_session_service import get_session_counts, revoke_other_sessions
 from services.booking_service import create_booking_for_customer
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
 from services.cleaner_service import retrieve_users as retrieve_cleaners
@@ -138,7 +138,7 @@ def _coerce_effective_epoch(effective_at: datetime | None) -> int:
         return int(time.time())
     if effective_at.tzinfo is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="effectiveAt must include timezone",
         )
     return int(effective_at.timestamp())
@@ -177,19 +177,19 @@ async def _find_pending_account_action(customer_id: str) -> PendingAccountLifecy
 
 
 async def _build_session_control(customer_id: str) -> SessionControlContract:
-    try:
-        active_count = await db.accessToken.count_documents({"userId": customer_id})
-    except Exception:
-        active_count = 1
-    revocable = max(int(active_count) - 1, 0)
+    counts = await get_session_counts(user_id=customer_id, current_access_token_id=None)
     return SessionControlContract(
-        activeSessionCount=int(active_count),
-        revocableSessionCount=revocable,
-        canRevokeOtherSessions=revocable > 0,
+        activeSessionCount=int(counts.active),
+        revocableSessionCount=int(counts.revocable),
+        canRevokeOtherSessions=counts.revocable > 0,
     )
 
 
-async def fetch_settings_snapshot_contract(*, customer_id: str) -> SettingsSnapshotContract:
+async def fetch_settings_snapshot_contract(
+    *,
+    customer_id: str,
+    include_sessions: bool = True,
+) -> SettingsSnapshotContract:
     defaults = _default_settings_snapshot()
     try:
         row = await db.user_settings.find_one({"userId": customer_id})
@@ -213,9 +213,13 @@ async def fetch_settings_snapshot_contract(*, customer_id: str) -> SettingsSnaps
     except Exception:
         security = defaults.security
 
-    sessions = await _build_session_control(customer_id)
-    pending_action = await _find_pending_account_action(customer_id)
-    account_lifecycle = AccountLifecycleSettingsContract(pendingAction=pending_action)
+    if include_sessions:
+        sessions = await _build_session_control(customer_id)
+        pending_action = await _find_pending_account_action(customer_id)
+        account_lifecycle = AccountLifecycleSettingsContract(pendingAction=pending_action)
+    else:
+        sessions = defaults.sessions
+        account_lifecycle = defaults.accountLifecycle
 
     return SettingsSnapshotContract(
         notifications=notifications,
@@ -232,7 +236,7 @@ async def update_notification_preferences_contract(
     customer_id: str,
     payload: NotificationPreferencesPatchContract,
 ) -> NotificationPreferencesContract:
-    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id)
+    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id, include_sessions=False)
     merged = _merge_notification_preferences(current=current_snapshot.notifications, payload=payload)
 
     now_epoch = int(time.time())
@@ -263,10 +267,16 @@ async def revoke_other_sessions_contract(
     customer_id: str,
     current_access_token_id: str,
 ) -> RevokeOtherSessionsResponseContract:
-    access_deleted, refresh_deleted = await delete_other_tokens_with_user_id(
-        user_id=customer_id,
-        current_access_token_id=current_access_token_id,
-    )
+    try:
+        access_deleted, refresh_deleted = await revoke_other_sessions(
+            user_id=customer_id,
+            current_access_token_id=current_access_token_id,
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke other sessions",
+        ) from err
     return RevokeOtherSessionsResponseContract(
         revokedAccessSessions=access_deleted,
         revokedRefreshSessions=refresh_deleted,
@@ -311,7 +321,7 @@ async def _apply_customer_deactivation(customer_id: str) -> None:
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Customer not found")
-    await delete_all_tokens_with_user_id(userId=customer_id)
+    return None
 
 
 async def request_account_deactivation_contract(
@@ -349,7 +359,7 @@ async def request_account_deletion_contract(
 ) -> AccountLifecycleActionResponseContract:
     if payload.confirmationText != _ACCOUNT_DELETE_CONFIRM_TEXT:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"confirmationText must equal '{_ACCOUNT_DELETE_CONFIRM_TEXT}'",
         )
 
@@ -432,7 +442,7 @@ async def update_security_preferences_contract(
     customer_id: str,
     payload: SecurityPreferencesPatchContract,
 ) -> SecurityPreferencesContract:
-    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id)
+    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id, include_sessions=False)
     merged = _merge_security_preferences(current=current_snapshot.security, payload=payload)
 
     now_epoch = int(time.time())
@@ -583,13 +593,13 @@ async def update_customer_profile_contract(
     if "fullName" in provided_fields:
         if payload.fullName is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="fullName cannot be null",
             )
         normalized = " ".join(payload.fullName.strip().split())
         if not normalized:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="fullName cannot be empty",
             )
         first_name, last_name = _split_full_name(normalized)
@@ -601,7 +611,7 @@ async def update_customer_profile_contract(
             update_dict["phoneNumber"] = None
         elif not _E164_RE.fullmatch(payload.phoneNumber):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="phoneNumber must be valid E.164 format",
             )
         else:

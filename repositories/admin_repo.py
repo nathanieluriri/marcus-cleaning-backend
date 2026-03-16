@@ -73,9 +73,10 @@ async def get_admins(filter_dict: dict = {},start=0,stop=100) -> List[AdminOut]:
             detail=f"An error occurred while fetching admins: {str(e)}"
         )
 async def update_admin(filter_dict: dict, admin_data: AdminUpdate) -> AdminOut:
+    update_payload = admin_data.model_dump(exclude_unset=True)
     result = await db.admins.find_one_and_update(
         filter_dict,
-        {"$set": admin_data.model_dump()},
+        {"$set": update_payload},
         return_document=ReturnDocument.AFTER
     )
     returnable_result = AdminOut(**result)

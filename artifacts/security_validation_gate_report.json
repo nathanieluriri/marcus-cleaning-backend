@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "legacy_modules_removed",
+      "ok": true,
+      "details": "missing=['security/tokens.py', 'services/auth_helpers.py']"
+    },
+    {
+      "name": "no_legacy_imports",
+      "ok": true,
+      "details": "no references found"
+    },
+    {
+      "name": "auth0_requires_nbf",
+      "ok": true,
+      "details": "nbf required in verifier"
+    },
+    {
+      "name": "session_endpoints_present",
+      "ok": true,
+      "details": "all role endpoints present"
+    },
+    {
+      "name": "auth0_ci_workflows_present",
+      "ok": true,
+      "details": "all present"
+    }
+  ]
+}

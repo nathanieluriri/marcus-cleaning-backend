@@ -121,6 +121,10 @@ class CleanerBase(BaseModel):
     password: str | bytes
     accountStatus: AccountStatus = AccountStatus.ACTIVE
     permissionList: Optional[PermissionList] = None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool = False
+    last_auth_at: int | None = None
     profile: CleanerProfile | None = None
     onboarding_status: OnboardingStatus = OnboardingStatus.PENDING
     rejection_reason: str | None = None
@@ -157,6 +161,10 @@ class CleanerUpdate(BaseModel):
     profile: CleanerProfile | None = None
     onboarding_status: OnboardingStatus | None = None
     rejection_reason: str | None = None
+    auth_provider: str | None = None
+    auth_subject: str | None = None
+    email_verified: bool | None = None
+    last_auth_at: int | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
     @model_validator(mode="after")

@@ -1,8 +1,7 @@
 import os
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import Response
 
 from core.response_envelope import document_response
 from schemas.customer_app_contract import (
@@ -24,8 +23,6 @@ from security.booking_access_check import require_customer_principal
 from services.customer_service import (
     add_user,
     authenticate_user,
-    authenticate_user_google,
-    oauth,
     refresh_user_tokens_reduce_number_of_logins,
     remove_user,
     retrieve_users,
@@ -59,11 +56,9 @@ from services.customer_app_contract_service import (
     update_security_preferences_contract,
     update_customer_profile_contract,
 )
+from services.auth_session_service import revoke_all_sessions, revoke_current_session
 from security.account_status_check import check_user_account_status_and_permissions
-from security.auth import verify_customer_refresh_token
 from security.principal import AuthPrincipal
-
-load_dotenv()
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 customer_app_router = APIRouter(tags=["Customers"])
@@ -74,36 +69,20 @@ ERROR_PAGE_URL = os.getenv("ERROR_PAGE_URL", "http://localhost:8080/error")
 
 @router.get("/google/auth")
 async def login_with_google_account(request: Request):
-    redirect_uri = request.url_for("auth_callback_user")
-    print("REDIRECT URI:", redirect_uri)
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    _ = request
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Google login is now handled by Auth0 Universal Login",
+    )
 
 
 @router.get("/auth/callback")
 async def auth_callback_user(request: Request):
-    token = await oauth.google.authorize_access_token(request)
-    user_info = token.get("userinfo")
-
-    if user_info:
-        print("✅ Google customer info:", user_info)
-        rider = CustomerSignupRequest(
-            firstName=user_info["name"],
-            password="",
-            lastName=user_info["given_name"],
-            email=user_info["email"],
-        )
-        data = await authenticate_user_google(user_data=rider)
-        access_token = data.access_token
-        refresh_token = data.refresh_token
-
-        success_url = f"{SUCCESS_PAGE_URL}?access_token={access_token}&refresh_token={refresh_token}"
-
-        return RedirectResponse(
-            url=success_url,
-            status_code=status.HTTP_302_FOUND,
-        )
-
-    raise HTTPException(status_code=400, detail={"message": "No customer info found"})
+    _ = request
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Google callback is now handled by Auth0 Universal Login",
+    )
 
 
 @router.get(
@@ -160,11 +139,10 @@ async def login_user(user_data: CustomerLogin):
 @document_response(message="Tokens refreshed successfully")
 async def refresh_user_tokens(
     user_data: CustomerRefresh,
-    principal: AuthPrincipal = Depends(verify_customer_refresh_token),
 ):
     items = await refresh_user_tokens_reduce_number_of_logins(
         user_refresh_data=user_data,
-        expired_access_token=principal.access_token_id,
+        expired_access_token="",
     )
     return items
 
@@ -390,6 +368,31 @@ async def revoke_other_sessions(
         customer_id=principal.user_id,
         current_access_token_id=principal.access_token_id,
     )
+
+
+@customer_app_router.post("/settings/sessions/revoke-all")
+@document_response(message="All sessions revoked successfully")
+async def revoke_all_customer_sessions(
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    access_deleted, refresh_deleted = await revoke_all_sessions(
+        user_id=principal.user_id,
+        auth_subject=principal.auth_subject,
+    )
+    return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
+
+
+@customer_app_router.post("/settings/sessions/logout")
+@document_response(message="Current session logged out successfully")
+async def logout_customer_session(
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    access_deleted, refresh_deleted = await revoke_current_session(
+        user_id=principal.user_id,
+        current_access_token_id=principal.access_token_id,
+        auth_subject=principal.auth_subject,
+    )
+    return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
 
 
 @customer_app_router.post("/settings/account/deactivate")

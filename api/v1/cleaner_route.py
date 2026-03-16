@@ -1,6 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
-
 from core.response_envelope import document_response
 from schemas.cleaner_schema import (
     CleanerLogin,
@@ -12,20 +10,16 @@ from schemas.cleaner_schema import (
 from services.cleaner_service import (
     add_user,
     authenticate_user,
-    authenticate_user_google,
-    oauth,
     refresh_user_tokens_reduce_number_of_logins,
     remove_user,
     retrieve_users,
     upsert_cleaner_onboarding_profile,
 )
+from services.auth_session_service import revoke_all_sessions, revoke_current_session, revoke_other_sessions
 from security.account_status_check import check_user_account_status_and_permissions
-from security.auth import verify_cleaner_refresh_token, verify_cleaner_token
+from security.auth import verify_cleaner_token
 from security.principal import AuthPrincipal
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 router = APIRouter(prefix="/cleaners", tags=["Cleaners"])
 
@@ -35,36 +29,20 @@ ERROR_PAGE_URL = os.getenv("ERROR_PAGE_URL", "http://localhost:8080/error")
 
 @router.get("/google/auth")
 async def login_with_google_account(request: Request):
-    redirect_uri = request.url_for("auth_callback_user")
-    print("REDIRECT URI:", redirect_uri)
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    _ = request
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Google login is now handled by Auth0 Universal Login",
+    )
 
 
 @router.get("/auth/callback")
 async def auth_callback_user(request: Request):
-    token = await oauth.google.authorize_access_token(request)
-    user_info = token.get("userinfo")
-
-    if user_info:
-        print("✅ Google cleaner info:", user_info)
-        rider = CleanerSignupRequest(
-            firstName=user_info["name"],
-            password="",
-            lastName=user_info["given_name"],
-            email=user_info["email"],
-        )
-        data = await authenticate_user_google(user_data=rider)
-        access_token = data.access_token
-        refresh_token = data.refresh_token
-
-        success_url = f"{SUCCESS_PAGE_URL}?access_token={access_token}&refresh_token={refresh_token}"
-
-        return RedirectResponse(
-            url=success_url,
-            status_code=status.HTTP_302_FOUND,
-        )
-
-    raise HTTPException(status_code=400, detail={"message": "No cleaner info found"})
+    _ = request
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Google callback is now handled by Auth0 Universal Login",
+    )
 
 
 @router.get(
@@ -109,11 +87,10 @@ async def login_user(user_data: CleanerLogin):
 @document_response(message="Tokens refreshed successfully")
 async def refresh_user_tokens(
     user_data: CleanerRefresh,
-    principal: AuthPrincipal = Depends(verify_cleaner_refresh_token),
 ):
     items = await refresh_user_tokens_reduce_number_of_logins(
         user_refresh_data=user_data,
-        expired_access_token=principal.access_token_id,
+        expired_access_token="",
     )
     return items
 
@@ -135,3 +112,40 @@ async def upsert_cleaner_onboarding(
 async def delete_user_account(cleaner: CleanerOut = Depends(check_user_account_status_and_permissions)):
     result = await remove_user(user_id=cleaner.id) # type: ignore
     return result
+
+
+@router.post("/sessions/revoke-others")
+@document_response(message="Other cleaner sessions revoked successfully")
+async def revoke_other_cleaner_sessions(
+    principal: AuthPrincipal = Depends(verify_cleaner_token),
+):
+    access_deleted, refresh_deleted = await revoke_other_sessions(
+        user_id=principal.user_id,
+        current_access_token_id=principal.access_token_id,
+    )
+    return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
+
+
+@router.post("/sessions/revoke-all")
+@document_response(message="All cleaner sessions revoked successfully")
+async def revoke_all_cleaner_sessions(
+    principal: AuthPrincipal = Depends(verify_cleaner_token),
+):
+    access_deleted, refresh_deleted = await revoke_all_sessions(
+        user_id=principal.user_id,
+        auth_subject=principal.auth_subject,
+    )
+    return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
+
+
+@router.post("/sessions/logout")
+@document_response(message="Cleaner current session logged out successfully")
+async def logout_cleaner_session(
+    principal: AuthPrincipal = Depends(verify_cleaner_token),
+):
+    access_deleted, refresh_deleted = await revoke_current_session(
+        user_id=principal.user_id,
+        current_access_token_id=principal.access_token_id,
+        auth_subject=principal.auth_subject,
+    )
+    return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
