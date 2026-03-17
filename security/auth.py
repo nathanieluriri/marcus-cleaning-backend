@@ -16,6 +16,7 @@ from security.auth0_verifier import (
 )
 from security.principal import AuthPrincipal
 from services.auth_identity_service import resolve_any_role_account_for_claims, resolve_role_account_for_claims
+from services.super_admin_identity_service import SUPER_ADMIN_STATIC_ID, is_known_super_admin_subject
 
 token_auth_scheme = HTTPBearer(auto_error=True)
 AUTH_ROLES: Final[tuple[str, ...]] = ("cleaner", "customer", "admin")
@@ -140,6 +141,13 @@ async def verify_admin_token(
 ) -> AuthPrincipal:
     claims = await _verify_claims(credentials)
     account = await resolve_role_account_for_claims(role="admin", claims=claims)
+    if account is None and is_known_super_admin_subject(claims.sub):
+        return _build_principal(
+            claims=claims,
+            credentials=credentials,
+            role="admin",
+            user_id=SUPER_ADMIN_STATIC_ID,
+        )
     if account is None:
         raise auth_role_mismatch(required_role="admin", actual_role=None)
     _enforce_session_policy(role="admin", claims=claims, account=account)

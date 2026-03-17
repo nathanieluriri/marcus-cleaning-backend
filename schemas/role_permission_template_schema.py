@@ -38,6 +38,20 @@ class RolePermissionRolloutOut(BaseModel):
     modified_count: int
 
 
+class RolePermissionTemplatePreviewOut(BaseModel):
+    additions: list[str]
+    removals: list[str]
+    invalidEntries: list[str]
+    duplicateKeys: list[str]
+
+
+class RolePermissionRolloutImpactOut(BaseModel):
+    role: RoleTemplateRole
+    source: Literal["template", "default"]
+    matched_count: int
+    would_change_count: int
+
+
 class PermissionCatalogRouteItem(BaseModel):
     resource: str
     method: str

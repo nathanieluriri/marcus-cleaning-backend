@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Literal
 
@@ -13,6 +14,7 @@ from services.role_account_gateway import (
     update_auth_identity_fields,
 )
 
+logger = logging.getLogger(__name__)
 RoleName = Literal["admin", "cleaner", "customer"]
 
 
@@ -63,8 +65,16 @@ async def resolve_role_account_for_claims(
     role: RoleName,
     claims: Auth0Claims,
 ):
+    logger.info(
+        "Resolve role account started role=%s subject=%s has_email=%s email_verified=%s",
+        role,
+        claims.sub,
+        bool(claims.email),
+        claims.email_verified,
+    )
     by_subject = await _find_by_subject(role=role, subject=claims.sub)
     if by_subject is not None:
+        logger.info("Resolve role account matched by subject role=%s account_id=%s", role, getattr(by_subject, "id", None))
         if _should_touch_account(by_subject, claims):
             await _apply_auth_updates(role=role, user_id=str(by_subject.id), claims=claims)  # type: ignore[arg-type]
         return by_subject
@@ -73,15 +83,31 @@ async def resolve_role_account_for_claims(
     if claims.email and claims.email_verified:
         by_email = await _find_by_email(role=role, email=claims.email)
         if by_email is not None:
+            logger.info("Resolve role account matched by email role=%s account_id=%s", role, getattr(by_email, "id", None))
             existing_subject = getattr(by_email, "auth_subject", None)
             if existing_subject and existing_subject != claims.sub:
+                logger.warning(
+                    "Resolve role account conflict role=%s existing_subject=%s incoming_subject=%s",
+                    role,
+                    existing_subject,
+                    claims.sub,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"{role.capitalize()} account is already linked to another identity",
                 )
             await _apply_auth_updates(role=role, user_id=str(by_email.id), claims=claims)  # type: ignore[arg-type]
             return by_email
+        logger.info("Resolve role account email lookup miss role=%s email=%s", role, claims.email)
+    else:
+        logger.info(
+            "Resolve role account skipped email lookup role=%s has_email=%s email_verified=%s",
+            role,
+            bool(claims.email),
+            claims.email_verified,
+        )
 
+    logger.info("Resolve role account not found role=%s subject=%s", role, claims.sub)
     return None
 
 

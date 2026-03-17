@@ -53,3 +53,12 @@ class S3StorageProvider(DocumentStorageProvider):
 
     def delete_object(self, *, object_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=object_key)
+
+    def save_bytes(self, *, object_key: str, payload: bytes, mime_type: str = "application/octet-stream") -> int:
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=object_key,
+            Body=payload,
+            ContentType=mime_type,
+        )
+        return len(payload)

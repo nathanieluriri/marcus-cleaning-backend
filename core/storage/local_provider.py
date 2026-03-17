@@ -49,7 +49,8 @@ class LocalStorageProvider(DocumentStorageProvider):
         if file_path.exists():
             file_path.unlink()
 
-    def save_bytes(self, *, object_key: str, payload: bytes) -> int:
+    def save_bytes(self, *, object_key: str, payload: bytes, mime_type: str = "application/octet-stream") -> int:
+        _ = mime_type
         file_path = self._root / object_key
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(payload)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -92,3 +93,28 @@ async def apply_permission_template_to_role_users(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to apply role permissions to users: {err}",
         ) from err
+
+
+async def estimate_permission_template_rollout(
+    *,
+    role: str,
+    permission_list: PermissionList,
+) -> tuple[int, int]:
+    collection = _get_collection_for_role(role)
+    permission_payload: dict[str, Any] = permission_list.model_dump(mode="json")
+    permission_payload_str = json.dumps(permission_payload, sort_keys=True, separators=(",", ":"), default=str)
+
+    matched_count = await collection.count_documents({})
+    would_change_count = 0
+    cursor = collection.find({}, {"permissionList": 1})
+    async for row in cursor:
+        current_permission_payload = row.get("permissionList")
+        current_permission_payload_str = json.dumps(
+            current_permission_payload or {},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if current_permission_payload_str != permission_payload_str:
+            would_change_count += 1
+    return matched_count, would_change_count

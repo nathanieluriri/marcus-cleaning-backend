@@ -11,7 +11,7 @@ from security import auth0_verifier
 
 
 @pytest.mark.asyncio
-async def test_auth0_verifier_requires_nbf_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_auth0_verifier_allows_missing_nbf_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         auth0_verifier,
         "get_settings",
@@ -34,15 +34,21 @@ async def test_auth0_verifier_requires_nbf_claim(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(verifier, "_get_public_key", _stub_public_key)
     monkeypatch.setattr(auth0_verifier.jwt, "get_unverified_header", lambda _token: {"alg": "RS256", "kid": "kid-1"})
 
-    def _raise_missing_nbf(*_args, **_kwargs):
-        raise jwt.MissingRequiredClaimError("nbf")
+    monkeypatch.setattr(
+        auth0_verifier.jwt,
+        "decode",
+        lambda *_args, **_kwargs: {
+            "sub": "auth0|abc123",
+            "iss": "https://example.us.auth0.com/",
+            "aud": "https://api.example",
+            "iat": 1710000000,
+            "exp": 1710003600,
+        },
+    )
 
-    monkeypatch.setattr(auth0_verifier.jwt, "decode", _raise_missing_nbf)
-
-    with pytest.raises(auth0_verifier.Auth0TokenValidationError) as exc_info:
-        await verifier.verify_access_token("header.payload.signature")
-
-    assert "Invalid token claims" in str(exc_info.value)
+    claims = await verifier.verify_access_token("header.payload.signature")
+    assert claims.sub == "auth0|abc123"
+    assert claims.nbf is None
 
 
 @pytest.mark.asyncio

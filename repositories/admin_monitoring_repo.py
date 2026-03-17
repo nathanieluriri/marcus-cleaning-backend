@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import time
+import uuid
 from collections import defaultdict
 from typing import Any
+
+from bson import ObjectId
 
 from core.database import db
 from schemas.admin_monitoring_schema import MonitoringEventCreate, MonitoringEventOut, SecurityAlertCreate, SecurityAlertOut
@@ -271,33 +275,170 @@ async def top_denied_permissions(*, since_epoch: int, limit: int = 10) -> list[d
 
 async def export_audit_events(
     *,
-    actor_id: str | None,
-    target_id: str | None,
-    endpoint: str | None,
-    start_epoch: int | None,
-    end_epoch: int | None,
+    query: dict[str, Any],
+    sort_desc: bool,
     limit: int,
 ) -> list[MonitoringEventOut]:
-    query: dict[str, Any] = {}
-    if actor_id:
-        query["actor.actor_id"] = actor_id
-    if target_id:
-        query["target.target_id"] = target_id
-    if endpoint:
-        query["request.endpoint"] = endpoint
-    if start_epoch is not None or end_epoch is not None:
-        date_query: dict[str, Any] = {}
-        if start_epoch is not None:
-            date_query["$gte"] = start_epoch
-        if end_epoch is not None:
-            date_query["$lte"] = end_epoch
-        query["date_created"] = date_query
-
-    cursor = _collection("admin_monitor_events").find(query).sort("date_created", -1).limit(limit)
+    sort_order = -1 if sort_desc else 1
+    cursor = _collection("admin_monitor_events").find(query).sort([("date_created", sort_order), ("_id", sort_order)]).limit(limit)
     rows: list[MonitoringEventOut] = []
     async for row in cursor:
         rows.append(MonitoringEventOut(**row))
     return rows
+
+
+async def count_audit_events(*, query: dict[str, Any]) -> int:
+    return await _collection("admin_monitor_events").count_documents(query)
+
+
+def _encode_cursor(*, timestamp: int, event_id: str) -> str:
+    payload = {"t": timestamp, "id": event_id}
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+
+def _decode_cursor(cursor: str) -> tuple[int, str]:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    raw = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+    payload = json.loads(raw)
+    timestamp = int(payload["t"])
+    event_id = str(payload["id"])
+    return timestamp, event_id
+
+
+def _build_cursor_query(*, cursor: str, sort_desc: bool) -> dict[str, Any]:
+    timestamp, event_id = _decode_cursor(cursor)
+    object_id = ObjectId(event_id)
+    if sort_desc:
+        return {"$or": [{"date_created": {"$lt": timestamp}}, {"date_created": timestamp, "_id": {"$lt": object_id}}]}
+    return {"$or": [{"date_created": {"$gt": timestamp}}, {"date_created": timestamp, "_id": {"$gt": object_id}}]}
+
+
+async def list_audit_events(
+    *,
+    query: dict[str, Any],
+    sort_desc: bool,
+    start: int,
+    stop: int,
+    cursor_token: str | None = None,
+) -> tuple[list[MonitoringEventOut], int | None, str | None, bool]:
+    sort_order = -1 if sort_desc else 1
+    limit = max(stop - start, 0)
+
+    query_with_cursor = dict(query)
+    total: int | None = None
+    if cursor_token:
+        query_with_cursor["$and"] = [query, _build_cursor_query(cursor=cursor_token, sort_desc=sort_desc)]
+    else:
+        total = await _collection("admin_monitor_events").count_documents(query)
+
+    cursor = (
+        _collection("admin_monitor_events")
+        .find(query_with_cursor)
+        .sort([("date_created", sort_order), ("_id", sort_order)])
+    )
+    if cursor_token:
+        cursor = cursor.limit(limit + 1)
+    else:
+        cursor = cursor.skip(start).limit(limit + 1)
+
+    rows: list[MonitoringEventOut] = []
+    async for row in cursor:
+        rows.append(MonitoringEventOut(**row))
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    next_cursor: str | None = None
+    if has_more and page_rows:
+        last_row = page_rows[-1]
+        last_id = str(last_row.id or "")
+        next_cursor = _encode_cursor(timestamp=last_row.date_created, event_id=last_id)
+
+    return page_rows, total, next_cursor, has_more
+
+
+async def get_audit_event_by_id(*, event_id: str) -> MonitoringEventOut | None:
+    row = await _collection("admin_monitor_events").find_one({"_id": ObjectId(event_id)})
+    if row is None:
+        return None
+    return MonitoringEventOut(**row)
+
+
+async def create_audit_export_job(
+    *,
+    payload: dict[str, Any],
+    export_query: dict[str, Any],
+    export_limit: int,
+    export_sort_desc: bool,
+    estimated_rows: int,
+    expires_at: int,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    export_id = f"aud_exp_{uuid.uuid4().hex[:12]}"
+    row = {
+        "export_id": export_id,
+        "status": "queued",
+        "estimated_rows": estimated_rows,
+        "download_url": None,
+        "object_key": None,
+        "expires_at": expires_at,
+        "task_id": task_id,
+        "payload": payload,
+        "export_query": export_query,
+        "export_limit": export_limit,
+        "export_sort_desc": export_sort_desc,
+        "date_created": int(time.time()),
+        "last_updated": int(time.time()),
+        "error": None,
+    }
+    await _collection("admin_audit_export_jobs").insert_one(row)
+    return row
+
+
+async def get_audit_export_job(*, export_id: str) -> dict[str, Any] | None:
+    return await _collection("admin_audit_export_jobs").find_one({"export_id": export_id})
+
+
+async def get_alert_by_id(*, alert_id: str) -> SecurityAlertOut | None:
+    if not ObjectId.is_valid(alert_id):
+        return None
+    row = await _collection("admin_security_alerts").find_one({"_id": ObjectId(alert_id)})
+    if row is None:
+        return None
+    return SecurityAlertOut(**row)
+
+
+async def update_audit_export_job(
+    *,
+    export_id: str,
+    status: str,
+    download_url: str | None = None,
+    object_key: str | None = None,
+    task_id: str | None = None,
+    error: str | None = None,
+    estimated_rows: int | None = None,
+    expires_at: int | None = None,
+) -> dict[str, Any] | None:
+    updates: dict[str, Any] = {
+        "status": status,
+        "last_updated": int(time.time()),
+        "error": error,
+    }
+    if download_url is not None:
+        updates["download_url"] = download_url
+    if object_key is not None:
+        updates["object_key"] = object_key
+    if task_id is not None:
+        updates["task_id"] = task_id
+    if estimated_rows is not None:
+        updates["estimated_rows"] = estimated_rows
+    if expires_at is not None:
+        updates["expires_at"] = expires_at
+    return await _collection("admin_audit_export_jobs").find_one_and_update(
+        {"export_id": export_id},
+        {"$set": updates},
+        return_document=True,
+    )
 
 
 async def record_delivery_log(*, alert_id: str, channel: str, status: str, detail: str | None = None) -> None:

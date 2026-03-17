@@ -129,6 +129,40 @@ async def test_admin_permission_check_allows_super_admin_without_permission_list
 
 
 @pytest.mark.asyncio
+async def test_admin_permission_check_allows_super_admin_on_new_admin_directory_route(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _StubAdmin:
+        id = "656f7ac12b9d4f6c9e2b9f7d"
+        email = "super-admin@example.com"
+        accountStatus = AccountStatus.ACTIVE
+        permissionList = None
+
+    async def _stub_retrieve_admin(*, id: str):
+        assert id == "656f7ac12b9d4f6c9e2b9f7d"
+        return _StubAdmin()
+
+    monkeypatch.setattr(
+        "security.account_status_check.retrieve_admin_by_admin_id",
+        _stub_retrieve_admin,
+    )
+
+    principal = AuthPrincipal(
+        user_id="656f7ac12b9d4f6c9e2b9f7d",
+        role="admin",
+        access_token_id="access-super",
+        jwt_token="jwt-super",
+    )
+
+    result = await check_admin_account_status_and_permissions(
+        request=_make_request("/v1/admins/customers"),
+        principal=principal,
+    )
+
+    assert result.id == "656f7ac12b9d4f6c9e2b9f7d"
+
+
+@pytest.mark.asyncio
 async def test_admin_permission_check_rejects_non_super_admin_without_permission_list(
     monkeypatch: pytest.MonkeyPatch,
 ):

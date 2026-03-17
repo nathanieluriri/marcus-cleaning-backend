@@ -6,7 +6,9 @@ from schemas.cleaner_schema import CleanerSignupRequest
 from schemas.customer_schema import CustomerSignupRequest
 from security.default_role_permissions import get_default_permission_list_for_role
 from services.role_permission_template_service import (
+    get_role_permission_rollout_impact,
     get_effective_permission_list_for_role,
+    preview_role_permission_template_for_role,
     set_role_permission_template_for_role,
 )
 
@@ -69,3 +71,36 @@ async def test_set_template_requires_admin_id():
         )
 
     assert exc_info.value.detail["code"] == ErrorCode.VALIDATION_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_preview_role_permission_template_detects_duplicate_and_invalid_keys():
+    candidate = get_default_permission_list_for_role("customer")
+    duplicate = candidate.permissions[0].model_copy()
+    mismatch = candidate.permissions[0].model_copy(update={"key": "GET:/wrong/path"})
+    candidate.permissions.extend([duplicate, mismatch])
+
+    preview = await preview_role_permission_template_for_role(
+        role="customer",
+        permission_list=candidate,
+    )
+
+    assert len(preview.duplicateKeys) >= 1
+    assert len(preview.invalidEntries) >= 1
+
+
+@pytest.mark.asyncio
+async def test_get_role_permission_rollout_impact_returns_estimated_counts(monkeypatch: pytest.MonkeyPatch):
+    async def _stub_estimate_permission_template_rollout(*, role: str, permission_list):
+        assert role == "customer"
+        assert permission_list.permissions
+        return 10, 7
+
+    monkeypatch.setattr(
+        "services.role_permission_template_service.estimate_permission_template_rollout",
+        _stub_estimate_permission_template_rollout,
+    )
+
+    result = await get_role_permission_rollout_impact("customer")
+    assert result.matched_count == 10
+    assert result.would_change_count == 7

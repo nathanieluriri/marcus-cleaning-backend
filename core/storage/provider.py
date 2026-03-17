@@ -25,3 +25,6 @@ class DocumentStorageProvider(Protocol):
 
     def delete_object(self, *, object_key: str) -> None:
         ...
+
+    def save_bytes(self, *, object_key: str, payload: bytes, mime_type: str = "application/octet-stream") -> int:
+        ...

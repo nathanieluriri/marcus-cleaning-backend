@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,9 @@ from typing import Any
 import requests
 
 from core.settings import get_settings
+
+logger = logging.getLogger(__name__)
+_SENSITIVE_PAYLOAD_KEYS = {"password", "client_secret", "refresh_token"}
 
 
 class Auth0APIError(RuntimeError):
@@ -34,6 +38,12 @@ class Auth0TokenSet:
 def _require_auth0_config() -> tuple[str, str, str]:
     settings = get_settings()
     if not settings.auth0_domain or not settings.auth0_client_id or not settings.auth0_client_secret:
+        logger.error(
+            "Auth0 client configuration is missing. domain_set=%s client_id_set=%s client_secret_set=%s",
+            bool(settings.auth0_domain),
+            bool(settings.auth0_client_id),
+            bool(settings.auth0_client_secret),
+        )
         raise Auth0APIError(message="Auth0 client configuration is missing")
     return settings.auth0_domain, settings.auth0_client_id, settings.auth0_client_secret
 
@@ -54,6 +64,20 @@ def _timeout_seconds() -> int:
     return get_settings().auth0_http_timeout_seconds
 
 
+def _redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in _SENSITIVE_PAYLOAD_KEYS and value:
+            redacted[key] = "***REDACTED***"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _auth0_request_id(headers: Any) -> str | None:
+    return headers.get("x-request-id") or headers.get("x-auth0-requestid")
+
+
 def _parse_token_response(payload: dict[str, Any]) -> Auth0TokenSet:
     access_token = str(payload.get("access_token") or "")
     if not access_token:
@@ -68,6 +92,8 @@ def _parse_token_response(payload: dict[str, Any]) -> Auth0TokenSet:
 
 
 def _request_json(*, method: str, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    redacted_payload = _redact_payload(payload)
+    logger.info("Auth0 request started method=%s url=%s payload=%s", method, url, redacted_payload)
     try:
         response = requests.request(
             method=method,
@@ -77,6 +103,7 @@ def _request_json(*, method: str, url: str, payload: dict[str, Any]) -> dict[str
             headers={"Content-Type": "application/json"},
         )
     except requests.RequestException as err:
+        logger.warning("Auth0 request transport failure method=%s url=%s error=%s", method, url, err)
         raise Auth0APIError(message="Failed to reach Auth0", details=str(err)) from err
 
     data: dict[str, Any]
@@ -87,16 +114,33 @@ def _request_json(*, method: str, url: str, payload: dict[str, Any]) -> dict[str
 
     if response.status_code >= 400:
         message = str(data.get("error_description") or data.get("error") or "Auth0 request failed")
+        logger.warning(
+            "Auth0 request failed method=%s url=%s status=%s auth0_request_id=%s response=%s payload=%s",
+            method,
+            url,
+            response.status_code,
+            _auth0_request_id(response.headers),
+            data,
+            redacted_payload,
+        )
         raise Auth0APIError(message=message, status_code=response.status_code, details=data)
+    logger.info(
+        "Auth0 request succeeded method=%s url=%s status=%s auth0_request_id=%s",
+        method,
+        url,
+        response.status_code,
+        _auth0_request_id(response.headers),
+    )
     return data
 
 
 async def password_login(*, email: str, password: str) -> Auth0TokenSet:
     domain, client_id, client_secret = _require_auth0_config()
     settings = get_settings()
+    uses_realm = bool(settings.auth0_db_connection)
 
     payload: dict[str, Any] = {
-        "grant_type": "password",
+        "grant_type": "http://auth0.com/oauth/grant-type/password-realm" if uses_realm else "password",
         "username": email,
         "password": password,
         "client_id": client_id,
@@ -105,7 +149,7 @@ async def password_login(*, email: str, password: str) -> Auth0TokenSet:
     }
     if settings.auth0_audience:
         payload["audience"] = settings.auth0_audience
-    if settings.auth0_db_connection:
+    if uses_realm:
         payload["realm"] = settings.auth0_db_connection
 
     data = await asyncio.to_thread(

@@ -168,7 +168,7 @@ class Auth0TokenVerifier:
                 audience=audience,
                 issuer=issuer,
                 options={
-                    "require": ["sub", "exp", "iat", "nbf"],
+                    "require": ["sub", "exp", "iat"],
                     "verify_signature": True,
                     "verify_exp": True,
                     "verify_iat": True,

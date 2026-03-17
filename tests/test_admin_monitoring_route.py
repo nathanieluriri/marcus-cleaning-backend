@@ -43,8 +43,8 @@ def test_monitoring_overview_route_returns_enveloped_payload(monkeypatch: pytest
 
 
 def test_monitoring_alert_read_route_returns_404_when_missing(monkeypatch: pytest.MonkeyPatch):
-    async def _stub_set_alert_read_state(*, alert_id: str, payload):
-        _ = alert_id, payload
+    async def _stub_set_alert_read_state(*, request, alert_id: str, actor_id: str | None, payload):
+        _ = request, alert_id, actor_id, payload
         return None
 
     monkeypatch.setattr(admin_route, "set_alert_read_state", _stub_set_alert_read_state)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
+import io
 import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,26 +19,38 @@ from typing import Any
 
 import requests
 from fastapi import Request
+from fastapi import HTTPException, status
+from bson import ObjectId
 
 from core.settings import get_settings
+from core.queue.manager import QueueManager
+from core.storage.local_provider import LocalStorageProvider
+from core.storage.manager import DocumentStorageManager
 from repositories.admin_monitoring_repo import (
     acknowledge_alert,
     active_sessions_by_admin,
     alert_sla_metrics,
     append_monitor_event,
+    count_audit_events,
     auth_heatmap,
     count_alerts,
     count_events,
+    create_audit_export_job,
     create_or_update_alert,
     create_or_update_counter,
     export_audit_events,
+    get_audit_export_job,
+    get_audit_event_by_id,
+    get_alert_by_id,
     global_session_creation_count,
     latest_successful_login_geo,
     list_alerts,
+    list_audit_events,
     mark_alert_read,
     record_delivery_log,
     rolling_counter_total,
     top_denied_permissions,
+    update_audit_export_job,
     upsert_device_registry,
     upsert_network_registry,
 )
@@ -44,14 +59,33 @@ from schemas.admin_monitoring_schema import (
     AlertSLAOut,
     AlertAcknowledgeIn,
     AlertReadIn,
+    AuditActor,
+    AuditActorType,
+    AuditChange,
+    AuditEvent,
+    AuditEventType,
+    AuditExportStatusOut,
     AuditExportOut,
     AuditExportRequest,
+    AuditHistoryPagination,
+    AuditHistoryQuery,
+    AuditHistoryResponse,
+    AuditHttpMethod,
+    AuditPermission,
+    AuditRedactionLevel,
+    AuditRelated,
+    AuditSeverity,
+    AuditSort,
+    AuditStatus,
+    AuditTarget,
+    AuditTargetType,
     AuthHeatmapCell,
     AuthHeatmapOut,
     DeniedPermissionItem,
     DeniedPermissionsTopOut,
     MonitoringActorRef,
     MonitoringEventCreate,
+    MonitoringEventOut,
     MonitoringEventType,
     MonitoringRequestContext,
     MonitoringSeverity,
@@ -62,6 +96,22 @@ from schemas.admin_monitoring_schema import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+_LEGACY_TO_CANONICAL_EVENT_TYPE: dict[str, str] = {
+    MonitoringEventType.ADMIN_LOGIN_SUCCESS.value: AuditEventType.ADMIN_LOGIN_SUCCEEDED.value,
+    MonitoringEventType.ADMIN_LOGIN_FAILURE.value: AuditEventType.ADMIN_LOGIN_FAILED.value,
+    MonitoringEventType.ADMIN_REFRESH_ATTEMPT.value: AuditEventType.ADMIN_TOKEN_REFRESHED.value,
+    MonitoringEventType.ADMIN_SESSION_REVOKED.value: AuditEventType.ADMIN_SESSION_REVOKED.value,
+    MonitoringEventType.ADMIN_PERMISSION_DENIED.value: AuditEventType.PERMISSION_DENIED.value,
+    MonitoringEventType.ADMIN_PERMISSION_TEMPLATE_CHANGED.value: AuditEventType.PERMISSION_TEMPLATE_UPDATED.value,
+    MonitoringEventType.ADMIN_PERMISSION_ROLLOUT.value: AuditEventType.PERMISSION_TEMPLATE_ROLLED_OUT.value,
+    MonitoringEventType.ADMIN_ONBOARDING_REVIEW_ACTION.value: AuditEventType.CLEANER_ONBOARDING_REVIEWED.value,
+    MonitoringEventType.ADMIN_MONITORING_ALERT_ACKNOWLEDGED.value: AuditEventType.MONITORING_ALERT_ACKNOWLEDGED.value,
+    MonitoringEventType.ADMIN_MONITORING_ALERT_READ_STATE_CHANGED.value: AuditEventType.MONITORING_ALERT_READ_STATE_CHANGED.value,
+    MonitoringEventType.ADMIN_MONITORING_ALERT_CREATED.value: "monitoring_alert_created",
+}
+
+_CANONICAL_TO_LEGACY_EVENT_TYPE = {value: key for key, value in _LEGACY_TO_CANONICAL_EVENT_TYPE.items()}
 
 
 @dataclass(frozen=True)
@@ -137,7 +187,18 @@ def _redact_email(email: str | None) -> str | None:
 
 
 def _redact_map(data: dict[str, Any]) -> dict[str, Any]:
-    blocked = {"password", "refresh_token", "token", "authorization"}
+    blocked = {
+        "password",
+        "refresh_token",
+        "access_token",
+        "id_token",
+        "token",
+        "authorization",
+        "card_number",
+        "account_number",
+        "bank_account",
+        "document_number",
+    }
     result: dict[str, Any] = {}
     for key, value in data.items():
         if key.lower() in blocked:
@@ -151,6 +212,289 @@ def _redact_map(data: dict[str, Any]) -> dict[str, Any]:
             continue
         result[key] = value
     return result
+
+
+def _resource_from_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    if not segments:
+        return None
+    if segments[0] == "v1" and len(segments) > 1:
+        return segments[1]
+    return segments[0]
+
+
+def _canonical_event_type(raw_event_type: str | None) -> str:
+    if not raw_event_type:
+        return AuditEventType.AUDIT_EXPORT_REQUESTED.value
+    return _LEGACY_TO_CANONICAL_EVENT_TYPE.get(raw_event_type, raw_event_type.lower())
+
+
+def _canonical_status(*, event_type: str | None, status_code: int | None, severity: str | None) -> AuditStatus:
+    if severity == MonitoringSeverity.CRITICAL.value:
+        return AuditStatus.CRITICAL
+    if severity == MonitoringSeverity.WARNING.value and (status_code is None or status_code < 400):
+        return AuditStatus.WARNING
+    if status_code == 403 or event_type == MonitoringEventType.ADMIN_PERMISSION_DENIED.value:
+        return AuditStatus.DENIED
+    if isinstance(status_code, int) and status_code >= 400:
+        return AuditStatus.FAILED
+    return AuditStatus.SUCCESS
+
+
+def _canonical_action(*, event_type: str, endpoint: str | None, method: str | None) -> str:
+    if event_type == AuditEventType.CLEANER_ONBOARDING_REVIEWED.value:
+        return "onboarding.review"
+    if event_type == AuditEventType.PERMISSION_DENIED.value:
+        return "permission.denied"
+    if event_type == AuditEventType.PERMISSION_TEMPLATE_UPDATED.value:
+        return "permission.template.update"
+    if event_type == AuditEventType.PERMISSION_TEMPLATE_ROLLED_OUT.value:
+        return "permission.template.rollout"
+    if event_type == "monitoring_alert_created":
+        return "alert.created"
+    if event_type == AuditEventType.MONITORING_ALERT_ACKNOWLEDGED.value:
+        return "alert.ack"
+    if event_type == AuditEventType.MONITORING_ALERT_READ_STATE_CHANGED.value:
+        return "alert.read_state_changed"
+    if endpoint and method:
+        return f"{method.lower()}.{endpoint.strip('/')}"
+    if endpoint:
+        return endpoint
+    return event_type
+
+
+def _summary_from_event(*, event_type: str, status: AuditStatus, details: dict[str, Any], reason: str | None) -> str:
+    if event_type == AuditEventType.CLEANER_ONBOARDING_REVIEWED.value:
+        status_value = str(details.get("status") or "").upper() or "UPDATED"
+        return f"Admin reviewed cleaner onboarding: {status_value}"
+    if event_type == AuditEventType.PERMISSION_DENIED.value:
+        permission_key = str(details.get("permission_key") or "unknown")
+        return f"Permission denied for {permission_key}"
+    if reason:
+        return reason
+    return f"Audit event {event_type} ({status.value})"
+
+
+def _apply_redaction(*, details: dict[str, Any], redaction: AuditRedactionLevel) -> dict[str, Any]:
+    if redaction == AuditRedactionLevel.NONE:
+        return details
+    if redaction == AuditRedactionLevel.STANDARD:
+        return _redact_map(details)
+    return _redact_map(details)
+
+
+def _map_monitoring_event_to_audit(
+    event: MonitoringEventOut,
+    *,
+    include_payload: bool,
+    include_related: bool,
+    redaction: AuditRedactionLevel,
+) -> AuditEvent:
+    request = event.request
+    details = dict(event.details or {})
+    event_type = _canonical_event_type(event.event_type.value if isinstance(event.event_type, MonitoringEventType) else str(event.event_type))
+    status = _canonical_status(
+        event_type=event.event_type.value if isinstance(event.event_type, MonitoringEventType) else str(event.event_type),
+        status_code=event.status_code,
+        severity=event.severity.value if isinstance(event.severity, MonitoringSeverity) else str(event.severity),
+    )
+    method_value = request.method if request and request.method in {m.value for m in AuditHttpMethod} else None
+    endpoint_value = request.path or request.endpoint if request else None
+    actor_id = event.actor.actor_id or "system"
+    actor_type_value = event.actor.actor_role if event.actor.actor_role in {m.value for m in AuditActorType} else "system"
+
+    payload_redacted: dict[str, Any] | None = None
+    if include_payload:
+        payload_redacted = _apply_redaction(details=details, redaction=redaction)
+
+    related: AuditRelated | None = None
+    if include_related:
+        related = AuditRelated(
+            alert_ids=[str(details["alert_id"])] if "alert_id" in details else None,
+            session_id=str(details["session_id"]) if "session_id" in details else None,
+            correlated_request_ids=details.get("correlated_request_ids"),
+        )
+
+    permission: AuditPermission | None = None
+    permission_key = details.get("permission_key")
+    if permission_key:
+        permission = AuditPermission(
+            key=str(permission_key),
+            decision="denied" if status == AuditStatus.DENIED else "allowed",
+            source="role_template",
+        )
+
+    changes: list[AuditChange] | None = None
+    if "status" in details and event_type == AuditEventType.CLEANER_ONBOARDING_REVIEWED.value:
+        changes = [AuditChange(field="onboarding_status", before="PENDING", after=details.get("status"))]
+
+    return AuditEvent(
+        id=str(event.id or ""),
+        timestamp=event.date_created,
+        date_created=event.date_created,
+        request_id=request.request_id if request else None,
+        trace_id=None,
+        span_id=None,
+        actor=AuditActor(
+            id=actor_id,
+            type=AuditActorType(actor_type_value),
+            display_name=event.actor.actor_email or actor_id,
+            email=event.actor.actor_email,
+        ),
+        target=AuditTarget(
+            id=str(event.target.target_id or "unknown"),
+            type=str(event.target.target_type or "unknown"),
+            display_name=str(event.target.target_id or "unknown"),
+        )
+        if event.target and event.target.target_id
+        else None,
+        event_type=event_type,
+        action=_canonical_action(event_type=event_type, endpoint=endpoint_value, method=method_value),
+        summary=_summary_from_event(event_type=event_type, status=status, details=details, reason=event.reason),
+        method=AuditHttpMethod(method_value) if method_value else None,
+        endpoint=endpoint_value,
+        resource=_resource_from_path(endpoint_value),
+        status=status,
+        http_status_code=event.status_code,
+        severity=AuditSeverity(event.severity.value) if event.severity else None,
+        ip_address=request.ip if request else None,
+        user_agent=request.user_agent if request else None,
+        geo=None,
+        permission=permission,
+        payload_redacted=payload_redacted,
+        changes=changes,
+        related=related,
+        tags=details.get("tags"),
+        risk_score=details.get("risk_score"),
+    )
+
+
+def _build_audit_db_query(query: AuditHistoryQuery) -> dict[str, Any]:
+    db_query: dict[str, Any] = {}
+    if query.actor_id:
+        db_query["actor.actor_id"] = query.actor_id
+    if query.actor_type:
+        db_query["actor.actor_role"] = query.actor_type.value
+    if query.target_id:
+        db_query["target.target_id"] = query.target_id
+    if query.target_type:
+        db_query["target.target_type"] = query.target_type.value
+    if query.endpoint:
+        escaped = re.escape(query.endpoint)
+        db_query["request.path"] = {"$regex": escaped}
+    if query.method:
+        db_query["request.method"] = query.method.value
+    if query.event_type:
+        legacy_values: list[str] = []
+        for value in query.event_type:
+            legacy_values.append(_CANONICAL_TO_LEGACY_EVENT_TYPE.get(value.value, value.value.upper()))
+        db_query["event_type"] = {"$in": legacy_values}
+    if query.request_id:
+        db_query["request.request_id"] = query.request_id
+    if query.ip:
+        db_query["request.ip"] = query.ip
+    if query.severity:
+        db_query["severity"] = query.severity.value
+    if query.from_epoch is not None or query.to_epoch is not None:
+        date_query: dict[str, Any] = {}
+        if query.from_epoch is not None:
+            date_query["$gte"] = query.from_epoch
+        if query.to_epoch is not None:
+            date_query["$lte"] = query.to_epoch
+        db_query["date_created"] = date_query
+    if query.tags:
+        db_query["details.tags"] = {"$all": query.tags}
+    if query.status == AuditStatus.DENIED:
+        db_query["status_code"] = 403
+    elif query.status == AuditStatus.SUCCESS:
+        db_query["status_code"] = {"$gte": 200, "$lt": 400}
+    elif query.status == AuditStatus.FAILED:
+        db_query["status_code"] = {"$gte": 400}
+    elif query.status == AuditStatus.WARNING:
+        db_query["severity"] = MonitoringSeverity.WARNING.value
+    elif query.status == AuditStatus.CRITICAL:
+        db_query["severity"] = MonitoringSeverity.CRITICAL.value
+    return db_query
+
+
+def _build_export_query_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    def _enum_or_none(enum_cls, raw):
+        if raw is None:
+            return None
+        try:
+            return enum_cls(raw)
+        except Exception:
+            return None
+
+    raw_event_type = payload.get("event_type")
+    event_types: list[AuditEventType] | None = None
+    if isinstance(raw_event_type, str) and raw_event_type.strip():
+        event_types = []
+        for token in raw_event_type.split(","):
+            normalized = token.strip()
+            if not normalized:
+                continue
+            parsed = _enum_or_none(AuditEventType, normalized)
+            if parsed:
+                event_types.append(parsed)
+    elif isinstance(raw_event_type, list):
+        event_types = []
+        for token in raw_event_type:
+            parsed = _enum_or_none(AuditEventType, str(token).strip())
+            if parsed:
+                event_types.append(parsed)
+
+    query_model = AuditHistoryQuery(
+        actor_id=payload.get("actor_id"),
+        actor_type=_enum_or_none(AuditActorType, payload.get("actor_type")),
+        target_id=payload.get("target_id"),
+        target_type=_enum_or_none(AuditTargetType, payload.get("target_type")),
+        endpoint=payload.get("endpoint"),
+        method=_enum_or_none(AuditHttpMethod, payload.get("method")),
+        status=_enum_or_none(AuditStatus, payload.get("status")),
+        event_type=event_types,
+        request_id=payload.get("request_id"),
+        ip=payload.get("ip"),
+        from_epoch=payload.get("from_epoch"),
+        to_epoch=payload.get("to_epoch"),
+        severity=_enum_or_none(AuditSeverity, payload.get("severity")),
+        tags=payload.get("tags") if isinstance(payload.get("tags"), list) else None,
+        include_payload=bool(payload.get("include_payload", False)),
+        include_related=False,
+        start=0,
+        stop=min(int(payload.get("limit") or 5000), 200),
+    )
+    return _build_audit_db_query(query_model)
+
+
+async def _augment_audit_query_for_alert_target(
+    *,
+    query: AuditHistoryQuery,
+    db_query: dict[str, Any],
+) -> dict[str, Any]:
+    if not query.target_id:
+        return db_query
+    if query.target_type not in {None, AuditTargetType.ALERT}:
+        return db_query
+
+    alert = await get_alert_by_id(alert_id=query.target_id)
+    if alert is None:
+        return db_query
+
+    or_clauses: list[dict[str, Any]] = [
+        {"target.target_id": query.target_id},
+        {"details.alert_id": query.target_id},
+    ]
+    if alert.request_id and not query.request_id:
+        or_clauses.append({"request.request_id": alert.request_id})
+
+    base_query = dict(db_query)
+    base_query.pop("target.target_id", None)
+    if not base_query:
+        return {"$or": or_clauses}
+    return {"$and": [base_query, {"$or": or_clauses}]}
 
 
 async def _fetch_geo_metadata(ip: str | None) -> dict[str, Any]:
@@ -378,6 +722,35 @@ async def _raise_security_alert(
         "date_created": created_alert.date_created,
         "date_created_iso_utc": _utc_iso(created_alert.date_created),
     }
+    await emit_admin_event(
+        event_type=MonitoringEventType.ADMIN_MONITORING_ALERT_CREATED,
+        severity=severity,
+        context=MonitoringContext(
+            request_id=request_id,
+            endpoint="monitoring_alert_engine",
+            method=None,
+            path="/v1/admins/monitoring/alerts",
+            ip=None,
+            ip_range=None,
+            user_agent=None,
+            fingerprint=None,
+            geo_hint=None,
+            asn=None,
+            network=None,
+        ),
+        actor_id=actor_id,
+        actor_email=None,
+        target_id=str(created_alert.id or ""),
+        target_type="alert",
+        status_code=201,
+        reason="monitoring_alert_created",
+        details={
+            "alert_id": str(created_alert.id or ""),
+            "rule_key": rule_key,
+            "severity": severity.value,
+            "source_request_id": request_id,
+        },
+    )
     asyncio.create_task(_dispatch_alert(str(created_alert.id or ""), payload))
 
 
@@ -1092,25 +1465,450 @@ async def list_monitoring_alerts(*, status: str | None, unread_only: bool, start
     return await list_alerts(status=status, unread_only=unread_only, start=start, stop=stop)
 
 
-async def set_alert_read_state(*, alert_id: str, payload: AlertReadIn):
-    return await mark_alert_read(alert_id=alert_id, is_read=payload.is_read)
+async def set_alert_read_state(
+    *,
+    request: Request,
+    alert_id: str,
+    actor_id: str | None,
+    payload: AlertReadIn,
+):
+    item = await mark_alert_read(alert_id=alert_id, is_read=payload.is_read)
+    if item is None:
+        return None
+    await emit_admin_event(
+        event_type=MonitoringEventType.ADMIN_MONITORING_ALERT_READ_STATE_CHANGED,
+        severity=MonitoringSeverity.INFO,
+        context=build_monitoring_context_from_request(request),
+        actor_id=actor_id,
+        actor_email=None,
+        target_id=alert_id,
+        target_type="alert",
+        status_code=200,
+        reason="monitoring_alert_read_state_changed",
+        details={
+            "alert_id": alert_id,
+            "is_read": payload.is_read,
+            "rule_key": item.rule_key,
+            "alert_request_id": item.request_id,
+        },
+    )
+    return item
 
 
-async def acknowledge_monitoring_alert(*, alert_id: str, actor_id: str | None, payload: AlertAcknowledgeIn):
+async def acknowledge_monitoring_alert(
+    *,
+    request: Request,
+    alert_id: str,
+    actor_id: str | None,
+    payload: AlertAcknowledgeIn,
+):
     ack_owner = actor_id if payload.ack else None
-    return await acknowledge_alert(alert_id=alert_id, ack_owner_id=ack_owner)
+    item = await acknowledge_alert(alert_id=alert_id, ack_owner_id=ack_owner)
+    if item is None:
+        return None
+    await emit_admin_event(
+        event_type=MonitoringEventType.ADMIN_MONITORING_ALERT_ACKNOWLEDGED,
+        severity=MonitoringSeverity.INFO,
+        context=build_monitoring_context_from_request(request),
+        actor_id=actor_id,
+        actor_email=None,
+        target_id=alert_id,
+        target_type="alert",
+        status_code=200,
+        reason="monitoring_alert_acknowledged",
+        details={
+            "alert_id": alert_id,
+            "ack": payload.ack,
+            "rule_key": item.rule_key,
+            "alert_request_id": item.request_id,
+        },
+    )
+    return item
+
+
+async def list_monitoring_audit(
+    *,
+    actor_id: str | None,
+    actor_type: AuditActorType | None,
+    target_id: str | None,
+    target_type: AuditTargetType | None,
+    endpoint: str | None,
+    method: AuditHttpMethod | None,
+    audit_status: AuditStatus | None,
+    event_types: list[AuditEventType] | None,
+    request_id: str | None,
+    ip: str | None,
+    from_epoch: int | None,
+    to_epoch: int | None,
+    severity: AuditSeverity | None,
+    tags: list[str] | None,
+    cursor: str | None,
+    sort: AuditSort,
+    include_payload: bool,
+    include_related: bool,
+    start: int,
+    stop: int,
+) -> AuditHistoryResponse:
+    query = AuditHistoryQuery(
+        actor_id=actor_id,
+        actor_type=actor_type,
+        target_id=target_id,
+        target_type=target_type,
+        endpoint=endpoint,
+        method=method,
+        status=audit_status,
+        event_type=event_types,
+        request_id=request_id,
+        ip=ip,
+        from_epoch=from_epoch,
+        to_epoch=to_epoch,
+        severity=severity,
+        tags=tags,
+        cursor=cursor,
+        sort=sort,
+        include_payload=include_payload,
+        include_related=include_related,
+        start=start,
+        stop=stop,
+    )
+    db_query = _build_audit_db_query(query)
+    db_query = await _augment_audit_query_for_alert_target(query=query, db_query=db_query)
+    sort_desc = query.sort == AuditSort.DESC
+
+    try:
+        rows, total, next_cursor, has_more = await list_audit_events(
+            query=db_query,
+            sort_desc=sort_desc,
+            start=0 if query.cursor else query.start,
+            stop=query.stop,
+            cursor_token=query.cursor,
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid query parameters",
+        ) from err
+
+    items = [
+        _map_monitoring_event_to_audit(
+            item,
+            include_payload=query.include_payload,
+            include_related=query.include_related,
+            redaction=AuditRedactionLevel.STRICT,
+        )
+        for item in rows
+    ]
+
+    return AuditHistoryResponse(
+        items=items,
+        pagination=AuditHistoryPagination(
+            start=query.start,
+            stop=query.stop,
+            count=len(items),
+            total=total,
+            next_cursor=next_cursor,
+            has_more=has_more,
+        ),
+        query={
+            "sort": query.sort.value,
+            "status": query.status.value if query.status else None,
+            "actor_id": query.actor_id,
+            "target_id": query.target_id,
+            "endpoint": query.endpoint,
+            "from_epoch": query.from_epoch,
+            "to_epoch": query.to_epoch,
+        },
+    )
+
+
+async def get_monitoring_audit_event(
+    *,
+    event_id: str,
+    include_payload: bool = True,
+    include_related: bool = True,
+    redaction: AuditRedactionLevel = AuditRedactionLevel.STRICT,
+    allow_unredacted: bool = False,
+) -> AuditEvent:
+    if not ObjectId.is_valid(event_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid audit event ID format")
+    if redaction == AuditRedactionLevel.NONE and not allow_unredacted:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Redaction level not permitted")
+
+    item = await get_audit_event_by_id(event_id=event_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitoring audit event not found")
+    return _map_monitoring_event_to_audit(
+        item,
+        include_payload=include_payload,
+        include_related=include_related,
+        redaction=redaction,
+    )
 
 
 async def export_monitoring_audit(payload: AuditExportRequest) -> AuditExportOut:
-    rows = await export_audit_events(
+    event_type_tokens: list[str] = []
+    if isinstance(payload.event_type, str):
+        event_type_tokens = [item.strip() for item in payload.event_type.split(",") if item.strip()]
+    elif isinstance(payload.event_type, list):
+        for item in payload.event_type:
+            for token in str(item).split(","):
+                normalized = token.strip()
+                if normalized:
+                    event_type_tokens.append(normalized)
+
+    parsed_event_types: list[AuditEventType] | None = None
+    if event_type_tokens:
+        parsed_event_types = []
+        invalid_tokens: list[str] = []
+        for token in event_type_tokens:
+            try:
+                parsed_event_types.append(AuditEventType(token))
+            except ValueError:
+                invalid_tokens.append(token)
+        if invalid_tokens:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Invalid event_type values: {', '.join(sorted(set(invalid_tokens)))}",
+            )
+
+    query = AuditHistoryQuery(
         actor_id=payload.actor_id,
+        actor_type=AuditActorType(payload.actor_type) if payload.actor_type else None,
         target_id=payload.target_id,
+        target_type=AuditTargetType(payload.target_type) if payload.target_type else None,
         endpoint=payload.endpoint,
-        start_epoch=payload.start_epoch,
-        end_epoch=payload.end_epoch,
-        limit=payload.limit,
+        method=AuditHttpMethod(payload.method) if payload.method else None,
+        status=AuditStatus(payload.status) if payload.status else None,
+        event_type=parsed_event_types,
+        request_id=payload.request_id,
+        ip=payload.ip,
+        from_epoch=payload.from_epoch,
+        to_epoch=payload.to_epoch,
+        severity=AuditSeverity(payload.severity) if payload.severity else None,
+        tags=payload.tags,
+        include_payload=payload.include_payload,
+        start=0,
+        stop=min(payload.limit, 200),
     )
-    return AuditExportOut(items=rows)
+    db_query = _build_audit_db_query(query)
+    estimated_rows = await count_audit_events(query=db_query)
+    expires_at = int(time.time()) + 24 * 3600
+    job = await create_audit_export_job(
+        payload=payload.model_dump(mode="json"),
+        export_query=db_query,
+        export_limit=payload.limit,
+        export_sort_desc=True,
+        estimated_rows=estimated_rows,
+        expires_at=expires_at,
+        task_id=None,
+    )
+    download_url = f"/v1/admins/monitoring/audit/export/{str(job['export_id'])}/download"
+    await update_audit_export_job(
+        export_id=str(job["export_id"]),
+        status="queued",
+        download_url=download_url,
+    )
+    try:
+        queue_job = QueueManager.get_instance().enqueue(
+            "generate_audit_export",
+            {
+                "export_id": str(job["export_id"]),
+                "query": db_query,
+                "limit": payload.limit,
+                "sort_desc": True,
+            },
+        )
+        await update_audit_export_job(
+            export_id=str(job["export_id"]),
+            status="queued",
+            task_id=getattr(queue_job, "task_id", None),
+        )
+    except Exception:
+        asyncio.create_task(
+            generate_audit_export(
+                export_id=str(job["export_id"]),
+                query=db_query,
+                limit=payload.limit,
+                sort_desc=True,
+            )
+        )
+    return AuditExportOut(
+        export_id=str(job["export_id"]),
+        status="queued",
+        estimated_rows=int(job["estimated_rows"]),
+        download_url=download_url,
+        expires_at=int(job["expires_at"]),
+    )
+
+
+async def get_monitoring_audit_export_status(*, export_id: str) -> AuditExportStatusOut:
+    row = await get_audit_export_job(export_id=export_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit export job not found")
+
+    raw_status = str(row.get("status") or "queued").lower()
+    if raw_status in {"queued", "processing"}:
+        task_id = row.get("task_id")
+        if task_id:
+            try:
+                queue_status = str(QueueManager.get_instance().get_status(str(task_id)) or "").upper()
+                if queue_status in {"STARTED", "RETRY", "RECEIVED"} and raw_status != "processing":
+                    await update_audit_export_job(export_id=export_id, status="processing")
+                elif queue_status in {"FAILURE", "REVOKED"}:
+                    await update_audit_export_job(export_id=export_id, status="failed", error=f"worker status: {queue_status}")
+            except Exception:
+                pass
+
+        refreshed = await get_audit_export_job(export_id=export_id)
+        if refreshed is not None:
+            row = refreshed
+
+        created_at = int(row.get("date_created") or 0)
+        is_stale_queued = str(row.get("status") or "").lower() == "queued" and (int(time.time()) - created_at) >= 30
+        if is_stale_queued:
+            execution_query = row.get("export_query")
+            if not isinstance(execution_query, dict):
+                execution_query = _build_export_query_from_payload(row.get("payload") or {})
+            execution_limit = int(row.get("export_limit") or 5000)
+            execution_sort_desc = bool(row.get("export_sort_desc") if row.get("export_sort_desc") is not None else True)
+            await generate_audit_export(
+                export_id=export_id,
+                query=execution_query,
+                limit=execution_limit,
+                sort_desc=execution_sort_desc,
+            )
+            refreshed = await get_audit_export_job(export_id=export_id)
+            if refreshed is not None:
+                row = refreshed
+
+    if not row.get("download_url"):
+        row["download_url"] = f"/v1/admins/monitoring/audit/export/{export_id}/download"
+    return AuditExportStatusOut(
+        export_id=str(row.get("export_id") or export_id),
+        status=str(row.get("status") or "queued"),
+        estimated_rows=int(row["estimated_rows"]) if row.get("estimated_rows") is not None else None,
+        download_url=row.get("download_url"),
+        expires_at=int(row["expires_at"]) if row.get("expires_at") is not None else None,
+        error=row.get("error"),
+    )
+
+
+def _csv_payload_for_events(rows: list[MonitoringEventOut]) -> bytes:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "id",
+            "timestamp",
+            "request_id",
+            "actor_id",
+            "actor_type",
+            "target_id",
+            "target_type",
+            "event_type",
+            "action",
+            "method",
+            "endpoint",
+            "status",
+            "http_status_code",
+            "severity",
+            "ip_address",
+            "summary",
+        ]
+    )
+    for row in rows:
+        event = _map_monitoring_event_to_audit(
+            row,
+            include_payload=False,
+            include_related=False,
+            redaction=AuditRedactionLevel.STRICT,
+        )
+        writer.writerow(
+            [
+                event.id,
+                event.timestamp,
+                event.request_id or "",
+                event.actor.id,
+                event.actor.type.value,
+                event.target.id if event.target else "",
+                event.target.type if event.target else "",
+                event.event_type,
+                event.action,
+                event.method.value if event.method else "",
+                event.endpoint or "",
+                event.status.value,
+                event.http_status_code or "",
+                event.severity.value if event.severity else "",
+                event.ip_address or "",
+                event.summary or "",
+            ]
+        )
+    return output.getvalue().encode("utf-8")
+
+
+async def generate_audit_export(
+    *,
+    export_id: str,
+    query: dict[str, Any],
+    limit: int,
+    sort_desc: bool = True,
+) -> None:
+    await update_audit_export_job(export_id=export_id, status="processing")
+    try:
+        rows = await export_audit_events(
+            query=query,
+            sort_desc=sort_desc,
+            limit=limit,
+        )
+        payload = _csv_payload_for_events(rows)
+        storage = DocumentStorageManager.get_instance().provider
+        object_key = f"audit-exports/{export_id}.csv"
+        storage.save_bytes(
+            object_key=object_key,
+            payload=payload,
+            mime_type="text/csv",
+        )
+        await update_audit_export_job(
+            export_id=export_id,
+            status="ready",
+            estimated_rows=len(rows),
+            object_key=object_key,
+        )
+    except Exception as err:
+        await update_audit_export_job(
+            export_id=export_id,
+            status="failed",
+            error=str(err),
+        )
+
+
+async def download_monitoring_audit_export(*, export_id: str) -> tuple[bytes | None, str | None, str | None]:
+    row = await get_audit_export_job(export_id=export_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit export job not found")
+    if str(row.get("status") or "") != "ready":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Audit export is not ready")
+
+    expires_at = int(row.get("expires_at") or 0)
+    now = int(time.time())
+    if expires_at <= now:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Audit export URL has expired")
+
+    object_key = str(row.get("object_key") or "")
+    if not object_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit export artifact missing")
+
+    provider = DocumentStorageManager.get_instance().provider
+    if isinstance(provider, LocalStorageProvider):
+        try:
+            payload = provider.read_bytes(object_key=object_key)
+        except FileNotFoundError as err:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit export artifact not found") from err
+        filename = f"{export_id}.csv"
+        return payload, "text/csv", filename
+
+    download_url = provider.download_url(object_key=object_key, expires_in=max(min(expires_at - now, 900), 1))
+    return None, download_url, None
 
 
 async def get_alert_sla_metrics(*, hours: int = 24) -> AlertSLAOut:
