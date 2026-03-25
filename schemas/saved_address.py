@@ -11,9 +11,9 @@ from schemas.place import PlaceOut
 class SavedAddressBase(BaseModel):
     user_id: str = Field(min_length=1)
     label: str = Field(min_length=1, max_length=80)
-    addressLine: str = Field(min_length=1, max_length=300)
     place: PlaceOut
     isDefault: bool = False
+    created_by_admin_id: str | None = None
 
 
 class SavedAddressCreate(SavedAddressBase):
@@ -23,22 +23,19 @@ class SavedAddressCreate(SavedAddressBase):
 
 class SavedAddressUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=80)
-    addressLine: str | None = Field(default=None, min_length=1, max_length=300)
     place: PlaceOut | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
 
-class SavedAddressCreateRequest(BaseModel):
+class CustomerSavedAddressCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=80)
-    addressLine: str = Field(min_length=1, max_length=300)
-    place: PlaceOut
+    place_id: str = Field(min_length=1)
     isDefault: bool | None = None
 
 
 class SavedAddressPatchRequest(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=80)
-    addressLine: str | None = Field(default=None, min_length=1, max_length=300)
-    place: PlaceOut | None = None
+    place_id: str | None = Field(default=None, min_length=1)
 
 
 class SavedAddressOut(SavedAddressBase):

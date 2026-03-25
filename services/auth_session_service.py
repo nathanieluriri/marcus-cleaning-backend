@@ -55,17 +55,20 @@ async def revoke_current_session(
     user_id: str,
     current_access_token_id: str,
     auth_subject: str | None = None,
+    auth_provider: str = "auth0",
 ) -> tuple[int, int]:
-    await _revoke_auth0_sessions_if_enabled(auth_subject=auth_subject)
+    await _revoke_auth0_sessions_if_enabled(auth_subject=auth_subject, auth_provider=auth_provider)
     return await delete_current_session_with_access_token_id(
         user_id=user_id,
         access_token_id=current_access_token_id,
     )
 
 
-async def _revoke_auth0_sessions_if_enabled(*, auth_subject: str | None) -> None:
+async def _revoke_auth0_sessions_if_enabled(*, auth_subject: str | None, auth_provider: str) -> None:
     settings = get_settings()
     if not settings.auth0_revoke_sessions_enabled:
+        return
+    if auth_provider != "auth0":
         return
     subject = (auth_subject or "").strip()
     if not subject:
@@ -73,8 +76,13 @@ async def _revoke_auth0_sessions_if_enabled(*, auth_subject: str | None) -> None
     await revoke_all_refresh_tokens_for_subject(auth_subject=subject)
 
 
-async def revoke_all_sessions(*, user_id: str, auth_subject: str | None = None) -> tuple[int, int]:
-    await _revoke_auth0_sessions_if_enabled(auth_subject=auth_subject)
+async def revoke_all_sessions(
+    *,
+    user_id: str,
+    auth_subject: str | None = None,
+    auth_provider: str = "auth0",
+) -> tuple[int, int]:
+    await _revoke_auth0_sessions_if_enabled(auth_subject=auth_subject, auth_provider=auth_provider)
 
     from core.database import db
 

@@ -3,7 +3,16 @@ from pydantic import ConfigDict, Field
 import time
 from security.hash import hash_password
 from typing import List, Optional
+from typing import Literal
 from pydantic import BaseModel, EmailStr, model_validator
+
+
+class AdminBaseSignUp(BaseModel):
+
+    full_name: str
+    email: EmailStr
+    password: str | bytes
+
 
 class AdminBase(BaseModel):
 
@@ -16,6 +25,7 @@ class AdminBase(BaseModel):
     auth_subject: str | None = None
     email_verified: bool = False
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] = "en"
 
 
 class AdminLogin(BaseModel):
@@ -40,19 +50,25 @@ class AdminCreate(AdminBase):
         return self
 class AdminUpdate(BaseModel):
     # Add other fields here 
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
     password:Optional[str | bytes]=None
+    accountStatus: AccountStatus | None = None
+    permissionList: Optional[PermissionList] = None
     auth_provider: str | None = None
     auth_subject: str | None = None
     email_verified: bool | None = None
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
     @model_validator(mode='after') # type: ignore
     def obscure_password(self):
         if self.password:
             self.password=hash_password(self.password)
-            return self
+        return self
 class AdminOut(AdminBase):
     # Add other fields here 
+    password: Optional[str | bytes] = None
     id: Optional[str] = Field(default=None, alias="_id")
 
     date_created: Optional[int] = None

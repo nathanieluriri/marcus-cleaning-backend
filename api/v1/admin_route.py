@@ -1,10 +1,12 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from fastapi.responses import RedirectResponse, Response
 
 from core.response_envelope import document_response
-from schemas.admin_schema import AdminBase, AdminCreate, AdminLogin, AdminOut, AdminRefresh
+from core.i18n import set_request_locale
+from schemas.admin_schema import AdminBaseSignUp, AdminCreate, AdminLogin, AdminOut, AdminRefresh, AdminUpdate
 from schemas.cleaner_schema import CleanerOnboardingReviewRequest
 from schemas.admin_directory_schema import (
     ADMIN_LIST_DEFAULT_START,
@@ -14,20 +16,33 @@ from schemas.admin_directory_schema import (
 from schemas.admin_reporting_schema import SignupBucket
 from schemas.imports import AccountStatus, OnboardingStatus
 from schemas.role_permission_template_schema import RolePermissionTemplateUpdate
+from schemas.saved_address import CustomerSavedAddressCreateRequest
 from security.account_status_check import check_admin_account_status_and_permissions
 from security.auth import verify_admin_token
 from security.principal import AuthPrincipal
 from services.admin_service import (
     add_admin,
     authenticate_admin,
+    create_permission_group,
+    create_admin_customer_place,
+    get_latest_admin_elevation_request_status,
+    is_main_super_admin_actor,
+    list_admin_elevation_requests,
+    list_permission_groups,
     refresh_admin_tokens_reduce_number_of_logins,
-    remove_admin,
+    remove_admin_with_auth0,
+    review_admin_elevation_request,
     retrieve_admin_cleaner_detail,
     retrieve_admin_cleaners,
     retrieve_admin_customer_detail,
+    retrieve_admin_customer_places,
     retrieve_admin_customers,
+    retrieve_admin_user_autocomplete,
     retrieve_admin_onboarding_queue,
+    retrieve_admin_by_admin_id,
     retrieve_admins,
+    submit_admin_elevation_request,
+    update_admin_by_id,
 )
 from services.cleaner_service import review_cleaner_onboarding
 from services.permission_catalog_service import build_permission_catalog_from_routes
@@ -77,8 +92,36 @@ from schemas.admin_monitoring_schema import (
     AuditStatus,
     AuditTargetType,
 )
+from api.v1.admin_features.service_definition import router as admin_feature_service_definition_router
+from api.v1.admin_features.addon_catalog import router as admin_feature_addon_catalog_router
+from api.v1.admin_features.dynamic_pricing_rule import router as admin_feature_dynamic_pricing_rule_router
+from api.v1.admin_features.service_area_boundary import router as admin_feature_service_area_boundary_router
+from api.v1.admin_features.cleaner_skill_equipment_tag import router as admin_feature_cleaner_skill_equipment_tag_router
+from api.v1.admin_features.availability_override import router as admin_feature_availability_override_router
+from api.v1.admin_features.promo_code import router as admin_feature_promo_code_router
+from api.v1.admin_features.service_credit_ledger import router as admin_feature_service_credit_ledger_router
+from api.v1.admin_features.payout_adjustment import router as admin_feature_payout_adjustment_router
+from api.v1.admin_features.chat_intervention import router as admin_feature_chat_intervention_router
+from api.v1.admin_features.system_broadcast import router as admin_feature_system_broadcast_router
+from api.v1.admin_features.concierge_booking import router as admin_feature_concierge_booking_router
+from api.v1.admin_features.claim_review import router as admin_feature_claim_review_router
 
 router = APIRouter(prefix="/admins", tags=["Admins"])
+
+_admin_feature_guard = [Depends(check_admin_account_status_and_permissions)]
+router.include_router(admin_feature_service_definition_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_addon_catalog_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_dynamic_pricing_rule_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_service_area_boundary_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_cleaner_skill_equipment_tag_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_availability_override_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_promo_code_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_service_credit_ledger_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_payout_adjustment_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_chat_intervention_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_system_broadcast_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_concierge_booking_router, dependencies=_admin_feature_guard)
+router.include_router(admin_feature_claim_review_router, dependencies=_admin_feature_guard)
 
 PERMISSION_CATALOG_SUCCESS_EXAMPLE: dict[str, object] = {
     "grouped": [
@@ -134,6 +177,39 @@ PERMISSION_CATALOG_SUCCESS_EXAMPLE: dict[str, object] = {
         ]
     },
 }
+
+
+class AdminElevationRequestIn(BaseModel):
+    reason: str = Field(min_length=10, max_length=2000)
+    requestedPermissions: list[str] = Field(default_factory=list)
+    requestedPermissionGroups: list[str] = Field(default_factory=list)
+
+
+class AdminPermissionGroupCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    permissions: list[str] = Field(min_length=1)
+
+
+class AdminElevationRequestDecisionIn(BaseModel):
+    decision: Literal["APPROVED", "REJECTED"]
+    grantedPermissions: list[str] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class LanguageUpdateIn(BaseModel):
+    language: Literal["en", "fr"]
+
+
+def _with_language(payload: object, language: str | None) -> dict:
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(mode="json", by_alias=True) # type: ignore[attr-defined]
+    elif isinstance(payload, dict):
+        data = dict(payload)
+    else:
+        data = {"value": payload}
+    data["language"] = language or "en"
+    return data
 
 
 def _parse_audit_event_types(raw_values: list[str] | None) -> list[AuditEventType] | None:
@@ -194,6 +270,103 @@ async def list_admins(
 @document_response(message="Admin profile fetched successfully")
 async def get_my_admin(admin: AdminOut = Depends(check_admin_account_status_and_permissions)):
     return admin
+
+
+@router.get("/profile/language")
+@document_response(message="Language fetched successfully")
+async def get_admin_language(
+    request: Request,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    language = getattr(admin, "preferredLanguage", "en")
+    set_request_locale(request, language)
+    return {"language": language}
+
+
+@router.patch("/profile/language")
+@document_response(message="Language updated successfully")
+async def update_admin_language(
+    payload: LanguageUpdateIn,
+    request: Request,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    updated = await update_admin_by_id(
+        admin_id=str(admin.id or ""),
+        admin_data=AdminUpdate(preferredLanguage=payload.language),
+    )
+    set_request_locale(request, payload.language)
+    return {"language": getattr(updated, "preferredLanguage", payload.language)}
+
+
+@router.post("/access/request-elevation")
+@document_response(message="Admin elevation request submitted successfully", status_code=status.HTTP_201_CREATED)
+async def request_admin_privilege_elevation(
+    payload: AdminElevationRequestIn,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await submit_admin_elevation_request(
+        admin_id=admin.id or "",
+        reason=payload.reason,
+        requested_permissions=payload.requestedPermissions,
+        requested_permission_groups=payload.requestedPermissionGroups,
+    )
+
+
+@router.get("/access/request-elevation/status")
+@document_response(message="Admin elevation request status fetched successfully")
+async def get_admin_privilege_elevation_status(
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await get_latest_admin_elevation_request_status(admin_id=admin.id or "")
+
+
+@router.get("/access/permission-groups")
+@document_response(message="Admin permission groups fetched successfully")
+async def get_admin_permission_groups(
+    # _: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await list_permission_groups()
+
+
+@router.post("/access/permission-groups")
+@document_response(message="Admin permission group created successfully", status_code=status.HTTP_201_CREATED)
+async def create_admin_permission_group(
+    payload: AdminPermissionGroupCreateIn,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await create_permission_group(
+        created_by=admin.id or "",
+        name=payload.name,
+        description=payload.description,
+        permissions=payload.permissions,
+    )
+
+
+@router.get("/access/requests")
+@document_response(message="Admin elevation requests fetched successfully", success_example=[])
+async def get_admin_elevation_requests(
+    status_filter: str | None = Query(default=None, alias="status"),
+    start: int = Query(default=0, ge=0),
+    stop: int = Query(default=50, gt=0, le=200),
+    _: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await list_admin_elevation_requests(status_filter=status_filter, start=start, stop=stop)
+
+
+@router.patch("/access/requests/{request_id}/decision")
+@document_response(message="Admin elevation request decision saved successfully")
+async def decide_admin_elevation_request(
+    request_id: str,
+    payload: AdminElevationRequestDecisionIn,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await review_admin_elevation_request(
+        request_id=request_id,
+        reviewer_admin_id=admin.id or "",
+        decision=payload.decision,
+        granted_permissions=payload.grantedPermissions,
+        note=payload.note,
+    )
 
 
 @router.get("/permission-templates/{role}")
@@ -342,6 +515,44 @@ async def get_customer_by_id_for_admin(
     return await retrieve_admin_customer_detail(customer_id=customer_id)
 
 
+@router.get("/customers/{customer_id}/places")
+@document_response(
+    message="Customer places fetched successfully",
+    success_example=[],
+    response_codes={400: "Invalid customer ID format", 401: "Unauthorized", 403: "Permission denied", 404: "Customer not found"},
+)
+async def get_customer_places_for_admin(
+    customer_id: str,
+    start: int = Query(default=0, ge=0),
+    stop: int = Query(default=20, gt=0, le=100),
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await retrieve_admin_customer_places(
+        admin_id=admin.id or "",
+        customer_id=customer_id,
+        start=start,
+        stop=stop,
+    )
+
+
+@router.post("/customers/{customer_id}/places", status_code=status.HTTP_201_CREATED)
+@document_response(
+    message="Customer place created successfully",
+    status_code=status.HTTP_201_CREATED,
+    response_codes={400: "Invalid customer ID format", 401: "Unauthorized", 403: "Permission denied", 404: "Customer not found"},
+)
+async def create_customer_place_for_admin(
+    customer_id: str,
+    payload: CustomerSavedAddressCreateRequest,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await create_admin_customer_place(
+        admin_id=admin.id or "",
+        customer_id=customer_id,
+        payload=payload,
+    )
+
+
 @router.get("/cleaners")
 @document_response(
     message="Cleaners fetched successfully",
@@ -394,19 +605,35 @@ async def get_cleaner_by_id_for_admin(
     return await retrieve_admin_cleaner_detail(cleaner_id=cleaner_id)
 
 
+@router.get("/users/autocomplete")
+@document_response(
+    message="Admin user autocomplete results fetched successfully",
+    success_example={"query": "john", "customers": [], "cleaners": []},
+    response_codes={401: "Unauthorized", 403: "Permission denied", 422: "Query too short"},
+)
+async def autocomplete_users_for_admin(
+    q: str = Query(min_length=2, description="Search text. Supports email, first name, last name, or exact user id."),
+    limit: int = Query(default=10, ge=1, le=25),
+    _: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    return await retrieve_admin_user_autocomplete(query=q, limit=limit)
+
+
 @router.post("/signup")
 @document_response(
     message="Admin created successfully",
     status_code=status.HTTP_201_CREATED,
 )
 async def signup_new_admin(
-    admin_data: AdminBase,
+    request: Request,
+    admin_data: AdminBaseSignUp,
     admin: AdminOut = Depends(check_admin_account_status_and_permissions),
 ):
     admin_data_dict = admin_data.model_dump()
-    new_admin = AdminCreate(invited_by=admin.id, **admin_data_dict) # type: ignore
-    items = await add_admin(admin_data=new_admin)
-    return items
+    new_admin = AdminCreate(invited_by=admin.id or "", **admin_data_dict) # type: ignore[arg-type]
+    items = await add_admin(admin_data=new_admin, raw_password=admin_data.password)
+    set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+    return _with_language(items, getattr(items, "preferredLanguage", "en"))
 
 
 @router.post("/login")
@@ -422,7 +649,8 @@ async def login_admin(request: Request, admin_data: AdminLogin):
             reason="login_success",
             status_code=200,
         )
-        return items
+        set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+        return _with_language(items, getattr(items, "preferredLanguage", "en"))
     except HTTPException as err:
         await log_admin_login_attempt(
             request=request,
@@ -484,7 +712,8 @@ async def refresh_admin_tokens(
             status_code=200,
         )
         items.password = ""
-        return items
+        set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+        return _with_language(items, getattr(items, "preferredLanguage", "en"))
     except HTTPException as err:
         detail_text = str(err.detail)
         await log_admin_refresh_attempt(
@@ -662,7 +891,7 @@ async def list_admin_monitoring_audit(
         resolved_stop = start + 20
     if resolved_stop <= start:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, # type: ignore
             detail="Invalid pagination window: start must be smaller than stop",
         )
     return await list_monitoring_audit(
@@ -769,6 +998,7 @@ async def revoke_all_admin_sessions(
     access_deleted, refresh_deleted = await revoke_all_sessions(
         user_id=principal.user_id,
         auth_subject=principal.auth_subject,
+        auth_provider=principal.auth_provider,
     )
     await log_admin_session_revocation(
         request=request,
@@ -791,6 +1021,7 @@ async def logout_admin_session(
         user_id=principal.user_id,
         current_access_token_id=principal.access_token_id,
         auth_subject=principal.auth_subject,
+        auth_provider=principal.auth_provider,
     )
     await log_admin_session_revocation(
         request=request,
@@ -805,5 +1036,33 @@ async def logout_admin_session(
 @router.delete("/account")
 @document_response(message="Admin account deleted successfully")
 async def delete_admin_account(admin: AdminOut = Depends(check_admin_account_status_and_permissions)):
-    result = await remove_admin(admin_id=admin.id) # type: ignore
+    result = await remove_admin_with_auth0(admin_id=admin.id or "")
+    return result
+
+
+@router.delete("/{admin_id}")
+@document_response(message="Admin account deleted successfully")
+async def delete_admin_by_id(
+    admin_id: str,
+    admin: AdminOut = Depends(check_admin_account_status_and_permissions),
+):
+    if not is_main_super_admin_actor(admin_email=str(admin.email)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Only main super admin can delete another admin",
+                "code": "ADMIN_DELETE_FORBIDDEN",
+                "details": {"adminId": admin.id},
+            },
+        )
+    if admin_id == (admin.id or ""):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Use /admins/account to delete your own account",
+                "code": "ADMIN_DELETE_FORBIDDEN",
+                "details": {"adminId": admin.id},
+            },
+        )
+    result = await remove_admin_with_auth0(admin_id=admin_id)
     return result

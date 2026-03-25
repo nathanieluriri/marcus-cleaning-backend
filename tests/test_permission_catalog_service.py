@@ -74,6 +74,14 @@ def test_permission_catalog_returns_grouped_and_flat_for_non_admin_v1_routes():
     auth_map = {item.key: item.requires_auth for item in route_items}
     assert auth_map["GET:/customers/me"] is True
     assert auth_map["POST:/customers/signup"] is False
+    generated_item = next(item for item in route_items if item.key == "POST:/customers/signup")
+    assert generated_item.summary is not None
+    assert "Creates a new account" in generated_item.summary
+    assert generated_item.description is not None
+    assert len(generated_item.description) > 0
+
+    grouped_customer = next(group for group in catalog.grouped if group.resource == "customers")
+    assert grouped_customer.featurePurpose is None
 
 
 def test_permission_catalog_raises_for_duplicate_permission_keys():

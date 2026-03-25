@@ -9,7 +9,6 @@ from bson import ObjectId
 from fastapi import HTTPException, status
 
 from core.database import db
-from schemas.booking import BookingBase
 from schemas.customer_app_contract import (
     AccountDeactivateRequestContract,
     AccountDeleteRequestContract,
@@ -42,17 +41,19 @@ from schemas.customer_app_contract import (
     PendingAccountLifecycleActionContract,
     QuietHoursContract,
     RevokeOtherSessionsResponseContract,
+    PrivacyPreferencesPatchContract,
     SecurityPreferencesContract,
     SecurityPreferencesPatchContract,
     SessionControlContract,
     SettingsSnapshotContract,
 )
 from schemas.customer_schema import CustomerLogin, CustomerSignupRequest, CustomerUpdate
-from schemas.imports import AccountStatus, AddOn, CleaningServices, Duration, Extra
+from schemas.imports import AccountStatus
 from security.principal import AuthPrincipal
 from core.storage.manager import DocumentStorageManager
 from repositories.document_repo import get_document_by_id
 from services.auth_session_service import get_session_counts, revoke_other_sessions
+from services.booking_contract_mapping_service import build_booking_base_from_contract
 from services.booking_service import create_booking_for_customer
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
 from services.cleaner_service import retrieve_users as retrieve_cleaners
@@ -262,6 +263,38 @@ async def update_notification_preferences_contract(
     return merged
 
 
+async def update_privacy_preferences_contract(
+    *,
+    customer_id: str,
+    payload: PrivacyPreferencesPatchContract,
+) -> dict[str, object]:
+    current_snapshot = await fetch_settings_snapshot_contract(customer_id=customer_id, include_sessions=False)
+    merged_privacy = dict(current_snapshot.privacy or {})
+    merged_privacy.update(payload.model_dump(exclude_none=True, mode="json"))
+
+    now_epoch = int(time.time())
+    try:
+        await db.user_settings.update_one(
+            {"userId": customer_id},
+            {
+                "$set": {
+                    "userId": customer_id,
+                    "privacy": merged_privacy,
+                    "lastUpdated": now_epoch,
+                },
+                "$setOnInsert": {"dateCreated": now_epoch},
+            },
+            upsert=True,
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update privacy preferences",
+        ) from err
+
+    return merged_privacy
+
+
 async def revoke_other_sessions_contract(
     *,
     customer_id: str,
@@ -280,6 +313,44 @@ async def revoke_other_sessions_contract(
     return RevokeOtherSessionsResponseContract(
         revokedAccessSessions=access_deleted,
         revokedRefreshSessions=refresh_deleted,
+    )
+
+
+async def revoke_session_by_id_contract(
+    *,
+    customer_id: str,
+    current_access_token_id: str,
+    session_id: str,
+) -> RevokeOtherSessionsResponseContract:
+    if session_id == current_access_token_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot revoke current session with this endpoint",
+        )
+
+    access_filter: dict[str, object] = {"userId": customer_id}
+    if ObjectId.is_valid(session_id):
+        access_filter["_id"] = ObjectId(session_id)
+    else:
+        access_filter["_id"] = session_id
+
+    access_result = await db.accessToken.delete_many(access_filter)
+    refresh_result = await db.refreshToken.delete_many(
+        {
+            "userId": customer_id,
+            "previousAccessToken": session_id,
+        }
+    )
+
+    if access_result.deleted_count == 0 and refresh_result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    return RevokeOtherSessionsResponseContract(
+        revokedAccessSessions=int(access_result.deleted_count),
+        revokedRefreshSessions=int(refresh_result.deleted_count),
     )
 
 
@@ -493,30 +564,6 @@ def _display_name(first_name: str | None, last_name: str | None) -> str:
     return full_name or "Cleaner"
 
 
-def _map_addon(extra_id: str) -> AddOn | None:
-    normalized = extra_id.lower()
-    if "laundry" in normalized:
-        return AddOn.LAUNDRY
-    if "fridge" in normalized:
-        return AddOn.INSIDE_FRIDGE
-    if "window" in normalized:
-        return AddOn.WINDOWS
-    if "cabinet" in normalized:
-        return AddOn.CABINETS
-    return None
-
-
-def _map_service(service_id: str) -> CleaningServices:
-    normalized = service_id.lower()
-    if "deep" in normalized:
-        return CleaningServices.DEEP_CLEAN
-    if "office" in normalized:
-        return CleaningServices.OFFICE
-    if "custom" in normalized:
-        return CleaningServices.CUSTOM
-    return CleaningServices.STANDARD
-
-
 async def sign_in_customer_contract(payload: AuthSignInRequestContract) -> AuthResponseContract:
     customer = await authenticate_user(
         CustomerLogin(
@@ -537,6 +584,7 @@ async def sign_in_customer_contract(payload: AuthSignInRequestContract) -> AuthR
         accessToken=customer.access_token or "",
         refreshToken=customer.refresh_token,
         expiresAt=_utc_now() + timedelta(hours=1),
+        language=getattr(customer, "preferredLanguage", "en"),
         user=user,
     )
 
@@ -564,6 +612,7 @@ async def sign_up_customer_contract(payload: AuthSignUpRequestContract) -> AuthR
         accessToken=customer.access_token or "",
         refreshToken=customer.refresh_token,
         expiresAt=_utc_now() + timedelta(hours=1),
+        language=getattr(customer, "preferredLanguage", "en"),
         user=user,
     )
 
@@ -579,6 +628,20 @@ async def _resolve_avatar_url(avatar_document_id: str | None) -> str | None:
         return provider.download_url(object_key=doc.object_key)
     except Exception:
         return None
+
+
+async def get_customer_profile_contract(*, customer_id: str) -> CustomerProfileContract:
+    customer = await retrieve_user_by_user_id(id=customer_id)
+    full_name = _display_name(customer.firstName, customer.lastName)
+    return CustomerProfileContract(
+        id=str(customer.id or customer_id),
+        fullName=full_name,
+        email=customer.email,
+        phoneNumber=customer.phoneNumber,
+        avatarDocumentId=customer.avatarDocumentId,
+        avatarUrl=await _resolve_avatar_url(customer.avatarDocumentId),
+        createdAt=_epoch_to_datetime(customer.date_created),
+    )
 
 
 async def update_customer_profile_contract(
@@ -824,20 +887,7 @@ async def create_booking_contract(
     principal: AuthPrincipal,
     payload: BookingCreateRequestContract,
 ) -> BookingCreateResponseContract:
-    selected_add_ons = [
-        value for value in (_map_addon(extra_id) for extra_id in payload.selectedExtraIds) if value is not None
-    ]
-
-    booking_payload = BookingBase(
-        customer_id=principal.user_id,
-        place_id=payload.location.id,
-        cleaner_id=payload.cleaner.id,
-        schedule=int(payload.schedule.date.timestamp()),
-        extras=Extra(add_ons=selected_add_ons),
-        service=_map_service(payload.service.id),
-        duration=Duration(hours=payload.duration.hours, minutes=payload.duration.minutes),
-        custom_details=None,
-    )
+    booking_payload = build_booking_base_from_contract(payload=payload)
 
     booking = await create_booking_for_customer(principal=principal, payload=booking_payload)
     if not booking.id:
@@ -862,7 +912,7 @@ async def fetch_customer_home_page(principal: AuthPrincipal) -> HomePayloadContr
             item = {
                 "id": str(address.id or place.get("place_id") or "loc_unknown"),
                 "label": address.label or place.get("name") or "Saved place",
-                "addressLine": address.addressLine or place.get("formatted_address") or place.get("description") or "Address",
+                "addressLine": place.get("formatted_address") or place.get("description") or "Address",
                 "hint": "Default" if address.isDefault else "Saved",
             }
             locations.append(item)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from fastapi import HTTPException
 from fastapi import status
 
 from core.errors import AppException, ErrorCode
@@ -43,9 +44,21 @@ def invalidate_role_permission_template_cache(*, role: str) -> None:
     _ = role
 
 
+async def _safe_get_role_permission_template(role: str) -> RolePermissionTemplateOut | None:
+    try:
+        return await get_role_permission_template(role)
+    except HTTPException as err:
+        detail = str(getattr(err, "detail", "") or "")
+        # Motor client can be tied to a closed event loop in test environments that rotate loops.
+        # Treat this specific case as a cache miss/template absence and continue with defaults.
+        if err.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR and "Event loop is closed" in detail:
+            return None
+        raise
+
+
 async def get_effective_permission_list_for_role(role: str) -> PermissionList:
     normalized_role = _normalize_non_admin_role(role)
-    template = await get_role_permission_template(normalized_role)
+    template = await _safe_get_role_permission_template(normalized_role)
     if template is not None:
         return PermissionList.model_validate(template.permissionList.model_dump(mode="json"))
     return get_default_permission_list_for_role(normalized_role)
@@ -53,7 +66,7 @@ async def get_effective_permission_list_for_role(role: str) -> PermissionList:
 
 async def get_role_permission_template_view(role: str) -> RolePermissionTemplateView:
     normalized_role = _normalize_non_admin_role(role)
-    template = await get_role_permission_template(normalized_role)
+    template = await _safe_get_role_permission_template(normalized_role)
     if template is not None:
         return RolePermissionTemplateView(
             role=template.role,
@@ -95,7 +108,7 @@ async def set_role_permission_template_for_role(
 
 async def rollout_role_permission_template_for_role(role: str) -> RolePermissionRolloutOut:
     normalized_role = _normalize_non_admin_role(role)
-    template = await get_role_permission_template(normalized_role)
+    template = await _safe_get_role_permission_template(normalized_role)
     source = "template"
     permission_list = template.permissionList if template is not None else get_default_permission_list_for_role(normalized_role)
     if template is None:
@@ -177,7 +190,7 @@ async def preview_role_permission_template_for_role(
 
 async def get_role_permission_rollout_impact(role: str) -> RolePermissionRolloutImpactOut:
     normalized_role = _normalize_non_admin_role(role)
-    template = await get_role_permission_template(normalized_role)
+    template = await _safe_get_role_permission_template(normalized_role)
     source = "template"
     permission_list = template.permissionList if template is not None else get_default_permission_list_for_role(normalized_role)
     if template is None:

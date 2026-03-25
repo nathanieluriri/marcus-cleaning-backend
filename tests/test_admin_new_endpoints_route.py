@@ -72,8 +72,16 @@ def test_admin_monitoring_audit_list_route_success(monkeypatch):
 
 
 def test_admin_monitoring_audit_detail_route_not_found(monkeypatch):
-    async def _stub_get_monitoring_audit_event(*, event_id: str):
+    async def _stub_get_monitoring_audit_event(
+        *,
+        event_id: str,
+        include_payload: bool = True,
+        include_related: bool = True,
+        redaction=None,
+        allow_unredacted: bool = False,
+    ):
         _ = event_id
+        _ = include_payload, include_related, redaction, allow_unredacted
         raise HTTPException(status_code=404, detail="Monitoring audit event not found")
 
     monkeypatch.setattr(admin_route, "get_monitoring_audit_event", _stub_get_monitoring_audit_event)
@@ -181,3 +189,188 @@ def test_admin_customer_detail_route_success(monkeypatch):
     response = client.get("/v1/admins/customers/67f0f0f0f0f0f0f0f0f0f0f1")
     assert response.status_code == 200
     assert response.json()["data"]["id"] == response.json()["data"]["_id"]
+
+
+def test_admin_customer_places_route_success(monkeypatch):
+    async def _stub_retrieve_admin_customer_places(*, admin_id: str, customer_id: str, start: int, stop: int):
+        assert admin_id == "admin-1"
+        assert customer_id == "67f0f0f0f0f0f0f0f0f0f0f1"
+        assert start == 0
+        assert stop == 20
+        return [
+            {
+                "place_id": "place_1",
+                "name": "Ikeja Home",
+                "formatted_address": "Ikeja, Lagos",
+                "longitude": 3.349,
+                "latitude": 6.601,
+                "country_code": "NG",
+                "description": "Saved default address",
+            }
+        ]
+
+    monkeypatch.setattr(admin_route, "retrieve_admin_customer_places", _stub_retrieve_admin_customer_places)
+    client = TestClient(_build_app())
+    response = client.get("/v1/admins/customers/67f0f0f0f0f0f0f0f0f0f0f1/places?start=0&stop=20")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"][0]["place_id"] == "place_1"
+
+
+def test_admin_customer_places_create_route_success(monkeypatch):
+    async def _stub_create_admin_customer_place(*, admin_id: str, customer_id: str, payload):
+        assert admin_id == "admin-1"
+        assert customer_id == "67f0f0f0f0f0f0f0f0f0f0f1"
+        assert payload.label == "Home"
+        assert payload.place_id == "pid-1"
+        assert payload.isDefault is True
+        return {
+            "id": "addr-1",
+            "user_id": customer_id,
+            "label": "Home",
+            "place": {
+                "place_id": "pid-1",
+                "name": "Lekki",
+                "formatted_address": "Lekki, Lagos",
+                "longitude": 3.52,
+                "latitude": 6.44,
+                "country_code": "NG",
+                "description": "Lekki, Lagos",
+            },
+            "isDefault": True,
+            "dateCreated": 100,
+            "lastUpdated": 100,
+        }
+
+    monkeypatch.setattr(admin_route, "create_admin_customer_place", _stub_create_admin_customer_place)
+    client = TestClient(_build_app())
+    response = client.post(
+        "/v1/admins/customers/67f0f0f0f0f0f0f0f0f0f0f1/places",
+        json={"label": "Home", "place_id": "pid-1", "isDefault": True},
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["label"] == "Home"
+    assert payload["data"]["place"]["place_id"] == "pid-1"
+
+
+def test_admin_user_autocomplete_route_success(monkeypatch):
+    async def _stub_retrieve_admin_user_autocomplete(*, query: str, limit: int):
+        assert query == "john"
+        assert limit == 8
+        return {
+            "query": "john",
+            "customers": [
+                {
+                    "id": "67f0f0f0f0f0f0f0f0f0f0f1",
+                    "_id": "67f0f0f0f0f0f0f0f0f0f0f1",
+                    "role": "customer",
+                    "firstName": "John",
+                    "lastName": "Doe",
+                    "email": "john@example.com",
+                    "onboarding_status": None,
+                    "allow_admin_selection": None,
+                }
+            ],
+            "cleaners": [
+                {
+                    "id": "67f0f0f0f0f0f0f0f0f0f0f2",
+                    "_id": "67f0f0f0f0f0f0f0f0f0f0f2",
+                    "role": "cleaner",
+                    "firstName": "Jane",
+                    "lastName": "Cleaner",
+                    "email": "jane@example.com",
+                    "onboarding_status": "APPROVED",
+                    "allow_admin_selection": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(admin_route, "retrieve_admin_user_autocomplete", _stub_retrieve_admin_user_autocomplete)
+    client = TestClient(_build_app())
+    response = client.get("/v1/admins/users/autocomplete?q=john&limit=8")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["customers"][0]["email"] == "john@example.com"
+    assert payload["data"]["cleaners"][0]["allow_admin_selection"] is True
+
+
+def test_admin_elevation_request_status_route_returns_latest(monkeypatch):
+    async def _stub_get_latest_admin_elevation_request_status(*, admin_id: str):
+        assert admin_id == "admin-1"
+        return {
+            "requestId": "req-1",
+            "status": "PENDING",
+            "requestedPermissions": ["GET:/admins/service-definitions"],
+            "reason": "Need extra access",
+            "decisionNote": None,
+            "dateCreated": 123,
+            "lastUpdated": 456,
+        }
+
+    monkeypatch.setattr(admin_route, "get_latest_admin_elevation_request_status", _stub_get_latest_admin_elevation_request_status)
+    client = TestClient(_build_app())
+    response = client.get("/v1/admins/access/request-elevation/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["status"] == "PENDING"
+    assert payload["data"]["requestId"] == "req-1"
+
+
+def test_admin_elevation_request_status_route_returns_none_state(monkeypatch):
+    async def _stub_get_latest_admin_elevation_request_status(*, admin_id: str):
+        assert admin_id == "admin-1"
+        return {
+            "requestId": None,
+            "status": "NONE",
+            "requestedPermissions": [],
+            "reason": None,
+            "decisionNote": None,
+            "dateCreated": None,
+            "lastUpdated": None,
+        }
+
+    monkeypatch.setattr(admin_route, "get_latest_admin_elevation_request_status", _stub_get_latest_admin_elevation_request_status)
+    client = TestClient(_build_app())
+    response = client.get("/v1/admins/access/request-elevation/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["status"] == "NONE"
+
+
+def test_delete_admin_by_id_requires_main_super_admin(monkeypatch):
+    async def _stub_remove_admin_with_auth0(*, admin_id: str):
+        _ = admin_id
+        return {"deleted": True, "adminId": admin_id, "auth0Status": "deleted"}
+
+    monkeypatch.setattr(admin_route, "remove_admin_with_auth0", _stub_remove_admin_with_auth0)
+    monkeypatch.setattr(admin_route, "is_main_super_admin_actor", lambda **_kwargs: False)
+
+    client = TestClient(_build_app())
+    response = client.delete("/v1/admins/67f0f0f0f0f0f0f0f0f0f0f2")
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["detail"]["code"] == "ADMIN_DELETE_FORBIDDEN"
+
+
+def test_delete_admin_by_id_succeeds_for_main_super_admin(monkeypatch):
+    async def _stub_remove_admin_with_auth0(*, admin_id: str):
+        assert admin_id == "67f0f0f0f0f0f0f0f0f0f0f2"
+        return {"deleted": True, "adminId": admin_id, "auth0Status": "deleted"}
+
+    monkeypatch.setattr(admin_route, "remove_admin_with_auth0", _stub_remove_admin_with_auth0)
+    monkeypatch.setattr(admin_route, "is_main_super_admin_actor", lambda **_kwargs: True)
+
+    client = TestClient(_build_app())
+    response = client.delete("/v1/admins/67f0f0f0f0f0f0f0f0f0f0f2")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["deleted"] is True

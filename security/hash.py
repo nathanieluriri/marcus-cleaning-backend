@@ -1,10 +1,19 @@
 import bcrypt
 
 def hash_password(password: str|bytes) -> bytes: # type: ignore
-    if type(password)==str:
-        salt = bcrypt.gensalt()
-        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
-        return hashed
+    if isinstance(password, str):
+        raw_password = password.encode("utf-8")
+    elif isinstance(password, bytes):
+        # Prevent accidental re-hashing of an existing bcrypt hash.
+        if password.startswith((b"$2a$", b"$2b$", b"$2y$")):
+            return password
+        raw_password = password
+    else:
+        raise TypeError("password must be str or bytes")
+
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(raw_password, salt)
+    return hashed
 
 
  

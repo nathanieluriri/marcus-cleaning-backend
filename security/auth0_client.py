@@ -5,7 +5,7 @@ import logging
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 import requests
 
@@ -33,6 +33,13 @@ class Auth0TokenSet:
     @property
     def expires_at(self) -> datetime:
         return datetime.now(timezone.utc) + timedelta(seconds=max(self.expires_in, 0))
+
+
+@dataclass(frozen=True)
+class Auth0UserProfile:
+    user_id: str
+    email: str | None
+    email_verified: bool
 
 
 def _require_auth0_config() -> tuple[str, str, str]:
@@ -113,7 +120,13 @@ def _request_json(*, method: str, url: str, payload: dict[str, Any]) -> dict[str
         data = {}
 
     if response.status_code >= 400:
-        message = str(data.get("error_description") or data.get("error") or "Auth0 request failed")
+        message = str(
+            data.get("error_description")
+            or data.get("description")
+            or data.get("message")
+            or data.get("error")
+            or "Auth0 request failed"
+        )
         logger.warning(
             "Auth0 request failed method=%s url=%s status=%s auth0_request_id=%s response=%s payload=%s",
             method,
@@ -241,6 +254,42 @@ def _request_no_content(*, method: str, url: str, token: str) -> None:
     raise Auth0APIError(message=message, status_code=response.status_code, details=data)
 
 
+def _request_json_authorized(
+    *,
+    method: str,
+    url: str,
+    token: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    try:
+        response = requests.request(
+            method=method,
+            url=url,
+            params=params,
+            timeout=_timeout_seconds(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+    except requests.RequestException as err:
+        raise Auth0APIError(message="Failed to reach Auth0 management API", details=str(err)) from err
+
+    data: Any = {}
+    try:
+        data = response.json() if response.content else {}
+    except ValueError:
+        data = {}
+
+    if response.status_code >= 400:
+        if isinstance(data, dict):
+            message = str(data.get("message") or data.get("description") or data.get("error") or "Auth0 management request failed")
+        else:
+            message = "Auth0 management request failed"
+        raise Auth0APIError(message=message, status_code=response.status_code, details=data)
+    return data
+
+
 async def management_api_token() -> str:
     domain, client_id, client_secret = _require_management_config()
     payload = {
@@ -279,3 +328,83 @@ async def revoke_all_refresh_tokens_for_subject(*, auth_subject: str) -> None:
         url=url,
         token=token,
     )
+
+
+async def delete_auth0_user(*, auth_subject: str) -> Literal["deleted", "not_found"]:
+    subject = auth_subject.strip()
+    if not subject:
+        raise Auth0APIError(message="auth_subject is required for Auth0 user deletion")
+    settings = get_settings()
+    if not settings.auth0_domain:
+        raise Auth0APIError(message="Auth0 domain is missing")
+
+    token = await management_api_token()
+    encoded_subject = urllib.parse.quote(subject, safe="")
+    url = f"https://{settings.auth0_domain}/api/v2/users/{encoded_subject}"
+    try:
+        await asyncio.to_thread(
+            _request_no_content,
+            method="DELETE",
+            url=url,
+            token=token,
+        )
+        return "deleted"
+    except Auth0APIError as err:
+        if err.status_code == 404:
+            return "not_found"
+        raise
+
+
+async def auth0_user_exists_by_email(*, email: str) -> bool:
+    settings = get_settings()
+    if not settings.auth0_domain:
+        raise Auth0APIError(message="Auth0 domain is missing")
+
+    token = await management_api_token()
+    url = f"https://{settings.auth0_domain}/api/v2/users-by-email"
+    payload = await asyncio.to_thread(
+        _request_json_authorized,
+        method="GET",
+        url=url,
+        token=token,
+        params={"email": email},
+    )
+    if isinstance(payload, list):
+        return len(payload) > 0
+    return False
+
+
+async def auth0_user_profile_by_email(*, email: str) -> Auth0UserProfile | None:
+    settings = get_settings()
+    if not settings.auth0_domain:
+        raise Auth0APIError(message="Auth0 domain is missing")
+
+    token = await management_api_token()
+    url = f"https://{settings.auth0_domain}/api/v2/users-by-email"
+    payload = await asyncio.to_thread(
+        _request_json_authorized,
+        method="GET",
+        url=url,
+        token=token,
+        params={"email": email},
+    )
+    if not isinstance(payload, list):
+        return None
+
+    normalized_target = email.strip().lower()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        item_email = item.get("email")
+        item_email_normalized = str(item_email or "").strip().lower()
+        if normalized_target and item_email_normalized and item_email_normalized != normalized_target:
+            continue
+        user_id = str(item.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        return Auth0UserProfile(
+            user_id=user_id,
+            email=str(item_email) if isinstance(item_email, str) else None,
+            email_verified=bool(item.get("email_verified")),
+        )
+    return None

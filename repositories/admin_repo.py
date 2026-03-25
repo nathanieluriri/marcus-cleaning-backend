@@ -1,4 +1,4 @@
-
+import logging
 from pymongo import ReturnDocument
 from core.database import db
 from fastapi import HTTPException,status
@@ -13,6 +13,8 @@ load_dotenv()
 SUPER_ADMIN_EMAIL=os.getenv("SUPER_ADMIN_EMAIL") 
 SUPER_ADMIN_PASSWORD=os.getenv("SUPER_ADMIN_PASSWORD")
 SUPER_ADMIN_HASHED_PASSWORD=hash_password(SUPER_ADMIN_PASSWORD)
+SUPER_ADMIN_FALLBACK_EMAIL = "super-admin@example.com"
+logger = logging.getLogger(__name__)
 
 
 async def create_admin(admin_data: AdminCreate) -> AdminOut:
@@ -32,11 +34,15 @@ async def get_admin(filter_dict: dict) -> Optional[AdminOut]:
             try:
                 filter_email = filter_dict.get("email",None)
                 filter_id = filter_dict.get("_id",None)
-                print(filter_id)
                 if filter_email==SUPER_ADMIN_EMAIL or str(filter_id)=="656f7ac12b9d4f6c9e2b9f7d" :
-                    return AdminOut(full_name="Super Admin",email=SUPER_ADMIN_EMAIL,password=SUPER_ADMIN_HASHED_PASSWORD,_id="656f7ac12b9d4f6c9e2b9f7d")
+                    return AdminOut(
+                        full_name="Super Admin",
+                        email=SUPER_ADMIN_EMAIL or SUPER_ADMIN_FALLBACK_EMAIL,
+                        password=SUPER_ADMIN_HASHED_PASSWORD,
+                        _id="656f7ac12b9d4f6c9e2b9f7d",
+                    )
             except Exception as e:
-                print(e)
+                logger.warning("Failed to evaluate super admin fallback: %s", e)
                 return None 
             return None
 
@@ -63,7 +69,12 @@ async def get_admins(filter_dict: dict = {},start=0,stop=100) -> List[AdminOut]:
             adminObj =AdminOut(**doc)
             adminObj.password=None
             admin_list.append(adminObj)
-        super_admin= AdminOut(_id="656f7ac12b9d4f6c9e2b9f7d",full_name="Super Admin",email=SUPER_ADMIN_EMAIL,password=SUPER_ADMIN_HASHED_PASSWORD)
+        super_admin= AdminOut(
+            _id="656f7ac12b9d4f6c9e2b9f7d",
+            full_name="Super Admin",
+            email=SUPER_ADMIN_EMAIL or SUPER_ADMIN_FALLBACK_EMAIL,
+            password=SUPER_ADMIN_HASHED_PASSWORD,
+        )
         admin_list.append(super_admin)
         return admin_list
 

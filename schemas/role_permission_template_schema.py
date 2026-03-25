@@ -66,6 +66,7 @@ class PermissionCatalogRouteItem(BaseModel):
 
 class PermissionCatalogGroup(BaseModel):
     resource: str
+    featurePurpose: str | None = None
     routes: list[PermissionCatalogRouteItem]
 
 

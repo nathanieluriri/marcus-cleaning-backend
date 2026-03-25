@@ -36,7 +36,6 @@ async def test_require_review_create_access_allows_first_review(monkeypatch: pyt
     access = await require_review_create_access(
         request=_make_request(
             {
-                "customer_id": "customer-1",
                 "booking_id": "booking-1",
                 "comment": "Great job",
                 "stars": 5,
@@ -62,7 +61,6 @@ async def test_require_review_create_access_blocks_duplicate_review(monkeypatch:
         await require_review_create_access(
             request=_make_request(
                 {
-                    "customer_id": "customer-1",
                     "booking_id": "booking-1",
                     "comment": "Great job",
                     "stars": 5,
@@ -86,7 +84,6 @@ async def test_require_review_create_access_rejects_booking_not_owned(monkeypatc
         await require_review_create_access(
             request=_make_request(
                 {
-                    "customer_id": "customer-1",
                     "booking_id": "booking-1",
                     "comment": "Great job",
                     "stars": 5,

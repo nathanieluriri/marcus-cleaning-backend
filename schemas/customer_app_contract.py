@@ -83,6 +83,7 @@ class AuthResponseContract(BaseModel):
     accessToken: str
     refreshToken: str | None = None
     expiresAt: datetime
+    language: str = "en"
     user: AuthUserContract
 
 
@@ -388,6 +389,53 @@ class SecurityPreferencesContract(BaseModel):
 class SecurityPreferencesPatchContract(BaseModel):
     biometricLoginEnabled: bool | None = None
     twoFactorEnabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LocationPrecisionContract(str, Enum):
+    PRECISE = "precise"
+    APPROXIMATE = "approximate"
+    OFF = "off"
+
+
+class PrivacyPreferencesPatchContract(BaseModel):
+    shareUsageAnalytics: bool | None = None
+    personalizedRecommendations: bool | None = None
+    locationPrecision: LocationPrecisionContract | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BookingMarkPaidResponseContract(BaseModel):
+    id: str
+    paymentStatus: str
+    updatedAt: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BookingRatingRequestContract(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=10)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("comment")
+    @classmethod
+    def validate_comment_non_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 10:
+            raise ValueError("comment must contain at least 10 non-space characters")
+        return normalized
+
+
+class BookingRatingResponseContract(BaseModel):
+    id: str
+    isRated: bool
+    customerRating: int
+    customerComment: str
+    updatedAt: datetime
 
     model_config = ConfigDict(extra="forbid")
 

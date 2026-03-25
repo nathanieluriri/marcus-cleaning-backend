@@ -1,6 +1,7 @@
 from schemas.imports import *
 from pydantic import ConfigDict, Field
 import time
+from typing import Literal
 from security.hash import hash_password
 
 
@@ -28,6 +29,7 @@ class CustomerBase(BaseModel):
     auth_subject: str | None = None
     email_verified: bool = False
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] = "en"
     pass
 
 
@@ -62,6 +64,7 @@ class CustomerUpdate(BaseModel):
     auth_subject: str | None = None
     email_verified: bool | None = None
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
 class CustomerOut(CustomerBase):

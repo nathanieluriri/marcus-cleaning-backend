@@ -545,7 +545,6 @@ def test_saved_addresses_routes_call_service(monkeypatch):
                 "id": "addr-1",
                 "user_id": user_id,
                 "label": "Home",
-                "addressLine": "123 Urban St",
                 "place": {
                     "place_id": "pid-1",
                     "name": "Lekki",
@@ -567,8 +566,14 @@ def test_saved_addresses_routes_call_service(monkeypatch):
             "id": "addr-1",
             "user_id": user_id,
             "label": payload.label,
-            "addressLine": payload.addressLine,
-            "place": payload.place.model_dump(),
+            "place": {
+                "place_id": payload.place_id,
+                "name": "Lekki",
+                "formatted_address": "Lekki, Lagos",
+                "longitude": 3.52,
+                "latitude": 6.44,
+                "description": "Lekki, Lagos",
+            },
             "isDefault": True,
             "dateCreated": 100,
             "lastUpdated": 100,
@@ -582,7 +587,6 @@ def test_saved_addresses_routes_call_service(monkeypatch):
             "id": address_id,
             "user_id": user_id,
             "label": "Work",
-            "addressLine": "45 Marina",
             "place": {
                 "place_id": "pid-2",
                 "name": "Marina",
@@ -603,7 +607,6 @@ def test_saved_addresses_routes_call_service(monkeypatch):
             "id": address_id,
             "user_id": user_id,
             "label": "Home",
-            "addressLine": "123 Urban St",
             "place": {
                 "place_id": "pid-1",
                 "name": "Lekki",
@@ -638,15 +641,7 @@ def test_saved_addresses_routes_call_service(monkeypatch):
         "/v1/customers/me/addresses",
         json={
             "label": "Home",
-            "addressLine": "123 Urban St",
-            "place": {
-                "place_id": "pid-1",
-                "name": "Lekki",
-                "formatted_address": "Lekki, Lagos",
-                "longitude": 3.52,
-                "latitude": 6.44,
-                "description": "Lekki, Lagos",
-            },
+            "place_id": "pid-1",
             "isDefault": True,
         },
     )
@@ -657,15 +652,7 @@ def test_saved_addresses_routes_call_service(monkeypatch):
         "/v1/customers/me/addresses/addr-1",
         json={
             "label": "Work",
-            "addressLine": "45 Marina",
-            "place": {
-                "place_id": "pid-2",
-                "name": "Marina",
-                "formatted_address": "Marina, Lagos",
-                "longitude": 3.4,
-                "latitude": 6.45,
-                "description": "Marina, Lagos",
-            },
+            "place_id": "pid-2",
         },
     )
     assert update_response.status_code == 200
@@ -678,3 +665,150 @@ def test_saved_addresses_routes_call_service(monkeypatch):
     delete_response = client.delete("/v1/customers/me/addresses/addr-1")
     assert delete_response.status_code == 200
     assert delete_response.json()["success"] is True
+
+
+def test_profile_alias_routes_call_existing_services(monkeypatch):
+    async def _stub_get_customer_profile_contract(*, customer_id: str):
+        assert customer_id == "customer-123"
+        return {
+            "id": customer_id,
+            "fullName": "Marcus Dashi",
+            "email": "tester@example.com",
+            "phoneNumber": None,
+            "avatarDocumentId": None,
+            "avatarUrl": None,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _stub_update_customer_profile_contract(*, customer_id: str, payload):
+        assert customer_id == "customer-123"
+        _ = payload
+        return {
+            "id": customer_id,
+            "fullName": "Marcus Dashi",
+            "email": "tester@example.com",
+            "phoneNumber": None,
+            "avatarDocumentId": None,
+            "avatarUrl": None,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _stub_list_my_saved_addresses(*, user_id: str, start: int, stop: int):
+        assert user_id == "customer-123"
+        assert start == 0
+        assert stop == 20
+        return []
+
+    monkeypatch.setattr(customer_route, "get_customer_profile_contract", _stub_get_customer_profile_contract)
+    monkeypatch.setattr(customer_route, "update_customer_profile_contract", _stub_update_customer_profile_contract)
+    monkeypatch.setattr(customer_route, "list_my_saved_addresses", _stub_list_my_saved_addresses)
+
+    client = TestClient(_build_app())
+    get_profile_response = client.get("/v1/profile/me")
+    patch_profile_response = client.patch("/v1/profile/me", json={"fullName": "Marcus Dashi"})
+    list_addresses_response = client.get("/v1/profile/addresses", params={"pageSize": 20})
+
+    assert get_profile_response.status_code == 200
+    assert patch_profile_response.status_code == 200
+    assert list_addresses_response.status_code == 200
+    assert get_profile_response.json()["success"] is True
+    assert patch_profile_response.json()["success"] is True
+    assert list_addresses_response.json()["success"] is True
+
+
+def test_profile_payment_methods_routes_call_payment_service(monkeypatch):
+    async def _stub_list_payment_methods_for_owner(*, owner_id: str, start: int, stop: int):
+        assert owner_id == "customer-123"
+        assert start == 0
+        assert stop == 20
+        return []
+
+    async def _stub_add_payment_method_for_owner(*, owner_id: str, payload):
+        assert owner_id == "customer-123"
+        assert payload.provider == "stripe"
+        return {"id": "pm_1", "provider": "stripe", "is_default": True}
+
+    async def _stub_update_payment_method_for_owner(*, owner_id: str, method_id: str, payload):
+        assert owner_id == "customer-123"
+        assert method_id == "pm_1"
+        _ = payload
+        return {"id": "pm_1", "provider": "stripe", "is_default": True}
+
+    async def _stub_delete_payment_method_for_owner(*, owner_id: str, method_id: str):
+        assert owner_id == "customer-123"
+        assert method_id == "pm_1"
+        return {"deleted": True}
+
+    monkeypatch.setattr(customer_route, "list_payment_methods_for_owner", _stub_list_payment_methods_for_owner)
+    monkeypatch.setattr(customer_route, "add_payment_method_for_owner", _stub_add_payment_method_for_owner)
+    monkeypatch.setattr(customer_route, "update_payment_method_for_owner", _stub_update_payment_method_for_owner)
+    monkeypatch.setattr(customer_route, "delete_payment_method_for_owner", _stub_delete_payment_method_for_owner)
+
+    client = TestClient(_build_app())
+    list_response = client.get("/v1/profile/payment-methods")
+    create_response = client.post(
+        "/v1/profile/payment-methods",
+        json={"provider": "stripe", "provider_method_ref": "pm_ref", "type": "card"},
+    )
+    patch_response = client.patch("/v1/profile/payment-methods/pm_1", json={"label": "Main card"})
+    delete_response = client.delete("/v1/profile/payment-methods/pm_1")
+
+    assert list_response.status_code == 200
+    assert create_response.status_code == 201
+    assert patch_response.status_code == 200
+    assert delete_response.status_code == 200
+    assert create_response.json()["success"] is True
+    assert delete_response.json()["success"] is True
+
+
+def test_settings_privacy_and_session_revoke_alias_routes(monkeypatch):
+    async def _stub_update_privacy_preferences_contract(*, customer_id: str, payload):
+        assert customer_id == "customer-123"
+        assert payload.shareUsageAnalytics is False
+        return {
+            "shareUsageAnalytics": False,
+            "personalizedRecommendations": True,
+            "locationPrecision": "approximate",
+        }
+
+    async def _stub_revoke_session_by_id_contract(*, customer_id: str, current_access_token_id: str, session_id: str):
+        assert customer_id == "customer-123"
+        assert current_access_token_id == "access-123"
+        assert session_id == "session-2"
+        return {"revokedAccessSessions": 1, "revokedRefreshSessions": 1}
+
+    monkeypatch.setattr(customer_route, "update_privacy_preferences_contract", _stub_update_privacy_preferences_contract)
+    monkeypatch.setattr(customer_route, "revoke_session_by_id_contract", _stub_revoke_session_by_id_contract)
+
+    client = TestClient(_build_app())
+    privacy_response = client.patch("/v1/settings/privacy", json={"shareUsageAnalytics": False})
+    revoke_response = client.delete("/v1/settings/security/sessions/session-2")
+
+    assert privacy_response.status_code == 200
+    assert revoke_response.status_code == 200
+    assert privacy_response.json()["success"] is True
+    assert revoke_response.json()["success"] is True
+
+
+def test_delete_settings_account_alias_calls_existing_deletion_contract(monkeypatch):
+    async def _stub_request_account_deletion_contract(*, customer_id: str, payload):
+        assert customer_id == "customer-123"
+        assert payload.confirmationText == "DELETE"
+        return {
+            "accepted": True,
+            "scheduled": False,
+            "action": "delete",
+            "effectiveAt": "2026-03-22T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(customer_route, "request_account_deletion_contract", _stub_request_account_deletion_contract)
+
+    client = TestClient(_build_app())
+    response = client.request(
+        "DELETE",
+        "/v1/settings/account",
+        json={"confirmationText": "DELETE"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True

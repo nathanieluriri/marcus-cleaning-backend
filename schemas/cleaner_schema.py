@@ -125,7 +125,9 @@ class CleanerBase(BaseModel):
     auth_subject: str | None = None
     email_verified: bool = False
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] = "en"
     profile: CleanerProfile | None = None
+    allow_admin_selection: bool = False
     onboarding_status: OnboardingStatus = OnboardingStatus.PENDING
     rejection_reason: str | None = None
 
@@ -159,12 +161,14 @@ class CleanerCreate(CleanerBase):
 
 class CleanerUpdate(BaseModel):
     profile: CleanerProfile | None = None
+    allow_admin_selection: bool | None = None
     onboarding_status: OnboardingStatus | None = None
     rejection_reason: str | None = None
     auth_provider: str | None = None
     auth_subject: str | None = None
     email_verified: bool | None = None
     last_auth_at: int | None = None
+    preferredLanguage: Literal["en", "fr"] | None = None
     last_updated: int = Field(default_factory=lambda: int(time.time()))
 
     @model_validator(mode="after")

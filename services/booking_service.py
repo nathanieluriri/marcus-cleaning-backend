@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 from fastapi import status
 
 from core.errors import AppException, ErrorCode, auth_role_mismatch, resource_not_found
+from core.database import db
 from repositories.booking_repo import (
     create_booking,
     delete_booking,
@@ -13,9 +15,11 @@ from repositories.booking_repo import (
     transition_booking_status,
     update_booking_fields,
 )
+from repositories.payment_repo import update_payment_transaction_status
 from schemas.booking import (
     BookingBase,
     BookingCreate,
+    BookingCustomerCreateRequest,
     BookingHistoryPage,
     BookingHistoryScheduledSort,
     BookingHistoryScope,
@@ -23,11 +27,14 @@ from schemas.booking import (
     BookingPaymentStatus,
 )
 from schemas.imports import BookingStatus
+from schemas.review import ReviewCreate
 from security.principal import AuthPrincipal
 from services.cleaner_service import retrieve_user_by_user_id as retrieve_cleaner_by_id
 from services.customer_service import retrieve_user_by_user_id as retrieve_customer_by_id
+from services.booking_state_machine import assert_booking_transition
 from services.payment_service import create_payment_for_booking, get_payment_transaction
 from services.pricing_service import calculate_quote_for_booking_id
+from services.review_service import add_review
 
 
 def _epoch() -> int:
@@ -58,19 +65,28 @@ def _parse_cursor_offset(*, cursor: str | None) -> int:
     return int(cursor)
 
 
-async def create_booking_for_customer(*, principal: AuthPrincipal, payload: BookingBase) -> BookingOut:
+def _epoch_to_iso8601(epoch: int | None) -> str:
+    if not epoch:
+        return datetime.now(timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+
+
+async def create_booking_for_customer(*, principal: AuthPrincipal, payload: BookingCustomerCreateRequest) -> BookingOut:
     if principal.role != "customer":
         raise auth_role_mismatch(required_role="customer", actual_role=principal.role)
-    if payload.customer_id != principal.user_id:
-        raise AppException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            code=ErrorCode.AUTH_PERMISSION_DENIED,
-            message="customer_id must match authenticated user",
-        )
+    await retrieve_customer_by_id(id=principal.user_id)
+    await retrieve_cleaner_by_id(id=payload.cleaner_id)
+    booking_payload = BookingBase(customer_id=principal.user_id, **payload.model_dump())
+    return await _create_booking_with_payment(payload=booking_payload)
 
+
+async def create_booking_by_admin_for_customer(*, payload: BookingBase) -> BookingOut:
     await retrieve_customer_by_id(id=payload.customer_id)
     await retrieve_cleaner_by_id(id=payload.cleaner_id)
+    return await _create_booking_with_payment(payload=payload)
 
+
+async def _create_booking_with_payment(*, payload: BookingBase) -> BookingOut:
     booking = await create_booking(
         BookingCreate(
             **payload.model_dump(),
@@ -190,6 +206,7 @@ async def accept_booking(
         )
     if booking.status != BookingStatus.REQUESTED:
         raise _status_conflict(current_status=booking.status, expected_status=BookingStatus.REQUESTED)
+    assert_booking_transition(current=booking.status, target=BookingStatus.ACCEPTED)
     if booking.cleaner_acceptance_deadline and _epoch() > booking.cleaner_acceptance_deadline:
         raise AppException(
             status_code=status.HTTP_409_CONFLICT,
@@ -242,6 +259,7 @@ async def complete_booking(*, booking_id: str, principal: AuthPrincipal) -> Book
         )
     if booking.status != BookingStatus.ACCEPTED:
         raise _status_conflict(current_status=booking.status, expected_status=BookingStatus.ACCEPTED)
+    assert_booking_transition(current=booking.status, target=BookingStatus.CLEANER_COMPLETED)
 
     updated = await transition_booking_status(
         booking_id=booking_id,
@@ -271,6 +289,7 @@ async def acknowledge_booking_completion(*, booking_id: str, principal: AuthPrin
         )
     if booking.status != BookingStatus.CLEANER_COMPLETED:
         raise _status_conflict(current_status=booking.status, expected_status=BookingStatus.CLEANER_COMPLETED)
+    assert_booking_transition(current=booking.status, target=BookingStatus.CUSTOMER_ACKNOWLEDGED)
 
     updated = await transition_booking_status(
         booking_id=booking_id,
@@ -285,3 +304,124 @@ async def acknowledge_booking_completion(*, booking_id: str, principal: AuthPrin
         latest = await retrieve_booking_by_id(booking_id=booking_id)
         raise _status_conflict(current_status=latest.status, expected_status=BookingStatus.CLEANER_COMPLETED)
     return updated
+
+
+async def mark_booking_paid_by_customer(*, booking_id: str, principal: AuthPrincipal) -> dict[str, str]:
+    if principal.role != "customer":
+        raise auth_role_mismatch(required_role="customer", actual_role=principal.role)
+
+    booking = await retrieve_booking_by_id(booking_id=booking_id)
+    if booking.customer_id != principal.user_id:
+        raise AppException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=ErrorCode.AUTH_PERMISSION_DENIED,
+            message="Only the booking customer can mark payment as paid",
+        )
+    if not booking.payment_id:
+        raise AppException(
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Booking has no payment transaction",
+        )
+
+    tx = await get_payment_transaction(payment_id=booking.payment_id)
+    current_status = (tx.status or "").lower()
+    if current_status in {"succeeded", "paid"}:
+        return {
+            "id": booking_id,
+            "paymentStatus": "paid",
+            "updatedAt": _epoch_to_iso8601(tx.updated_at),
+        }
+
+    if current_status not in {"pending", "failed"}:
+        raise AppException(
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Payment cannot be marked as paid in current state",
+            details={"payment_status": tx.status},
+        )
+
+    updated_tx = await update_payment_transaction_status(
+        reference=tx.reference,
+        status="succeeded",
+        response_payload=dict(tx.response_payload or {}),
+    )
+    if updated_tx is None:
+        raise resource_not_found("PaymentTransaction", tx.reference)
+
+    return {
+        "id": booking_id,
+        "paymentStatus": "paid",
+        "updatedAt": _epoch_to_iso8601(updated_tx.updated_at),
+    }
+
+
+async def rate_booking_by_customer(
+    *,
+    booking_id: str,
+    principal: AuthPrincipal,
+    rating: int,
+    comment: str,
+) -> dict[str, str | int | bool]:
+    if principal.role != "customer":
+        raise auth_role_mismatch(required_role="customer", actual_role=principal.role)
+
+    booking = await retrieve_booking_by_id(booking_id=booking_id)
+    if booking.customer_id != principal.user_id:
+        raise AppException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=ErrorCode.AUTH_PERMISSION_DENIED,
+            message="Only the booking customer can rate this booking",
+        )
+
+    if booking.status not in {BookingStatus.CLEANER_COMPLETED, BookingStatus.CUSTOMER_ACKNOWLEDGED}:
+        raise AppException(
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Booking cannot be rated in current status",
+            details={"status": booking.status.value},
+        )
+
+    normalized_comment = comment.strip()
+    if rating < 1 or rating > 5:
+        raise AppException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="rating must be between 1 and 5",
+        )
+    if len(normalized_comment) < 10:
+        raise AppException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="comment must contain at least 10 non-space characters",
+        )
+
+    existing = await db.reviews.find_one(
+        {
+            "customer_id": principal.user_id,
+            "booking_id": booking_id,
+        }
+    )
+    if existing is not None:
+        raise AppException(
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.VALIDATION_FAILED,
+            message="Booking has already been rated",
+        )
+
+    created = await add_review(
+        ReviewCreate(
+            customer_id=principal.user_id,
+            booking_id=booking_id,
+            cleaner_id=booking.cleaner_id,
+            comment=normalized_comment,
+            stars=rating,
+        )
+    )
+    return {
+        "id": booking_id,
+        "isRated": True,
+        "customerRating": created.stars,
+        "customerComment": created.comment,
+        "updatedAt": _epoch_to_iso8601(created.last_updated),
+    }

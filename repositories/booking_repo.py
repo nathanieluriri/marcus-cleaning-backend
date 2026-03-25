@@ -80,9 +80,9 @@ async def get_bookings_history(
     await _ensure_booking_indexes()
     query: dict[str, Any] = dict(filter_dict or {})
 
-    if scope == "upcoming":
+    if scope in {"upcoming", "current"}:
         query["schedule"] = {"$gte": now_epoch}
-    elif scope == "past":
+    elif scope in {"past", "history"}:
         query["schedule"] = {"$lt": now_epoch}
 
     direction = ASCENDING if scheduled_sort == "asc" else DESCENDING

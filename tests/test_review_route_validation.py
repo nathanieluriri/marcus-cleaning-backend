@@ -28,7 +28,6 @@ def test_create_review_rejects_short_comment(monkeypatch):
     response = client.post(
         "/v1/reviews/",
         json={
-            "customer_id": "customer-1",
             "booking_id": "booking-1",
             "comment": "too short",
             "stars": 5,
@@ -66,7 +65,6 @@ def test_create_review_allows_minimum_length_comment(monkeypatch):
     response = client.post(
         "/v1/reviews/",
         json={
-            "customer_id": "customer-1",
             "booking_id": "booking-1",
             "comment": "great work!",
             "stars": 5,

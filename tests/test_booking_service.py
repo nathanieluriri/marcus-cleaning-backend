@@ -8,6 +8,7 @@ import pytest
 from core.errors import AppException, ErrorCode
 from schemas.booking import (
     BookingBase,
+    BookingCustomerCreateRequest,
     BookingHistoryScheduledSort,
     BookingHistoryScope,
     BookingOut,
@@ -27,9 +28,8 @@ def _principal(*, role: str = "customer", user_id: str = "customer-1") -> AuthPr
     )
 
 
-def _booking_payload(*, customer_id: str = "customer-1") -> BookingBase:
-    return BookingBase(
-        customer_id=customer_id,
+def _booking_payload() -> BookingCustomerCreateRequest:
+    return BookingCustomerCreateRequest(
         place_id="place-1",
         cleaner_id="cleaner-1",
         schedule=int(time.time()) + 7_200,
@@ -153,16 +153,39 @@ async def test_create_booking_for_customer_rolls_back_when_payment_creation_fail
 
 
 @pytest.mark.asyncio
-async def test_create_booking_for_customer_rejects_customer_id_mismatch():
-    payload = _booking_payload(customer_id="customer-2")
+async def test_create_booking_for_customer_uses_authenticated_customer_id(monkeypatch: pytest.MonkeyPatch):
+    payload = _booking_payload()
     principal = _principal(user_id="customer-1")
 
-    with pytest.raises(AppException) as exc_info:
-        await booking_service.create_booking_for_customer(principal=principal, payload=payload)
+    async def _stub_retrieve_customer(*, id: str):
+        assert id == "customer-1"
+        return SimpleNamespace(id=id)
 
-    exc = exc_info.value
-    assert exc.status_code == 403
-    assert exc.detail["code"] == ErrorCode.AUTH_PERMISSION_DENIED.value
+    async def _stub_retrieve_cleaner(**_kwargs):
+        return SimpleNamespace(id="cleaner-1")
+
+    async def _stub_create_booking(booking_create):
+        assert booking_create.customer_id == "customer-1"
+        return _booking_out(id="booking-token-derived")
+
+    async def _stub_create_payment_for_booking(*, booking_id: str):
+        return SimpleNamespace(id=f"payment-{booking_id}")
+
+    async def _stub_calculate_quote_for_booking_id(*, booking_id: str):
+        return SimpleNamespace(amount_minor=1000, currency="NGN", breakdown={"total_amount": 1000})
+
+    async def _stub_update_booking_fields(*, booking_id: str, update_dict: dict):
+        return _booking_out(id=booking_id, payment_id=update_dict["payment_id"])
+
+    monkeypatch.setattr(booking_service, "retrieve_customer_by_id", _stub_retrieve_customer)
+    monkeypatch.setattr(booking_service, "retrieve_cleaner_by_id", _stub_retrieve_cleaner)
+    monkeypatch.setattr(booking_service, "create_booking", _stub_create_booking)
+    monkeypatch.setattr(booking_service, "create_payment_for_booking", _stub_create_payment_for_booking)
+    monkeypatch.setattr(booking_service, "calculate_quote_for_booking_id", _stub_calculate_quote_for_booking_id)
+    monkeypatch.setattr(booking_service, "update_booking_fields", _stub_update_booking_fields)
+
+    result = await booking_service.create_booking_for_customer(principal=principal, payload=payload)
+    assert result.id == "booking-token-derived"
 
 
 @pytest.mark.asyncio
@@ -274,3 +297,96 @@ async def test_retrieve_bookings_for_principal_rejects_invalid_cursor():
     exc = exc_info.value
     assert exc.status_code == 400
     assert exc.detail["code"] == ErrorCode.VALIDATION_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_mark_booking_paid_by_customer_is_idempotent_when_already_paid(monkeypatch: pytest.MonkeyPatch):
+    principal = _principal(role="customer", user_id="customer-1")
+    booking = _booking_out(id="booking-1", customer_id="customer-1", payment_id="payment-1")
+
+    async def _stub_retrieve_booking_by_id(*, booking_id: str):
+        assert booking_id == "booking-1"
+        return booking
+
+    async def _stub_get_payment_transaction(*, payment_id: str):
+        assert payment_id == "payment-1"
+        return SimpleNamespace(status="succeeded", updated_at=int(time.time()), reference="ref-1", response_payload={})
+
+    monkeypatch.setattr(booking_service, "retrieve_booking_by_id", _stub_retrieve_booking_by_id)
+    monkeypatch.setattr(booking_service, "get_payment_transaction", _stub_get_payment_transaction)
+
+    result = await booking_service.mark_booking_paid_by_customer(booking_id="booking-1", principal=principal)
+
+    assert result["id"] == "booking-1"
+    assert result["paymentStatus"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_mark_booking_paid_by_customer_updates_pending_payment(monkeypatch: pytest.MonkeyPatch):
+    principal = _principal(role="customer", user_id="customer-1")
+    booking = _booking_out(id="booking-1", customer_id="customer-1", payment_id="payment-1")
+
+    async def _stub_retrieve_booking_by_id(*, booking_id: str):
+        assert booking_id == "booking-1"
+        return booking
+
+    async def _stub_get_payment_transaction(*, payment_id: str):
+        assert payment_id == "payment-1"
+        return SimpleNamespace(status="pending", updated_at=int(time.time()), reference="ref-1", response_payload={})
+
+    async def _stub_update_payment_transaction_status(*, reference: str, status: str, response_payload: dict):
+        assert reference == "ref-1"
+        assert status == "succeeded"
+        _ = response_payload
+        return SimpleNamespace(updated_at=int(time.time()))
+
+    monkeypatch.setattr(booking_service, "retrieve_booking_by_id", _stub_retrieve_booking_by_id)
+    monkeypatch.setattr(booking_service, "get_payment_transaction", _stub_get_payment_transaction)
+    monkeypatch.setattr(booking_service, "update_payment_transaction_status", _stub_update_payment_transaction_status)
+
+    result = await booking_service.mark_booking_paid_by_customer(booking_id="booking-1", principal=principal)
+
+    assert result["paymentStatus"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_rate_booking_by_customer_creates_review(monkeypatch: pytest.MonkeyPatch):
+    principal = _principal(role="customer", user_id="customer-1")
+    booking = _booking_out(
+        id="booking-1",
+        customer_id="customer-1",
+        cleaner_id="cleaner-1",
+        status=BookingStatus.CLEANER_COMPLETED,
+    )
+
+    async def _stub_retrieve_booking_by_id(*, booking_id: str):
+        assert booking_id == "booking-1"
+        return booking
+
+    class _StubReviewsCollection:
+        async def find_one(self, query: dict):
+            assert query["customer_id"] == "customer-1"
+            assert query["booking_id"] == "booking-1"
+            return None
+
+    async def _stub_add_review(payload):
+        assert payload.customer_id == "customer-1"
+        assert payload.booking_id == "booking-1"
+        assert payload.cleaner_id == "cleaner-1"
+        assert payload.stars == 5
+        assert payload.comment == "Very clean service"
+        return SimpleNamespace(stars=5, comment="Very clean service", last_updated=int(time.time()))
+
+    monkeypatch.setattr(booking_service, "retrieve_booking_by_id", _stub_retrieve_booking_by_id)
+    monkeypatch.setattr(booking_service, "db", SimpleNamespace(reviews=_StubReviewsCollection()))
+    monkeypatch.setattr(booking_service, "add_review", _stub_add_review)
+
+    result = await booking_service.rate_booking_by_customer(
+        booking_id="booking-1",
+        principal=principal,
+        rating=5,
+        comment="Very clean service",
+    )
+
+    assert result["isRated"] is True
+    assert result["customerRating"] == 5

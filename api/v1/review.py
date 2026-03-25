@@ -6,7 +6,7 @@ from core.response_envelope import document_response
 from schemas.review import (
     ReviewCreate,
     ReviewOut,
-    ReviewBase,
+    ReviewCreateRequest,
     ReviewUpdate,
 )
 from services.review_service import (
@@ -117,14 +117,14 @@ async def get_review_by_id(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_review(
-    payload: ReviewBase,
+    payload: ReviewCreateRequest,
     access: ReviewAccessContext = Depends(require_review_create_access),
 ):
     """
     Creates a new Review.
     """
     # Creates ReviewCreate object which includes date_created/last_updated.
-    payload_dict = payload.model_dump(exclude={"customer_id", "booking_id"})
+    payload_dict = payload.model_dump(exclude={"booking_id"})
     new_data = ReviewCreate(
         **payload_dict,
         customer_id=access.customer_id,

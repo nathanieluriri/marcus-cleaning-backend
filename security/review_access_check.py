@@ -103,14 +103,7 @@ async def require_review_create_access(
             detail="Invalid request body format",
         )
 
-    payload_customer_id = body.get("customer_id")
     booking_id = body.get("booking_id")
-
-    if not isinstance(payload_customer_id, str) or not payload_customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="customer_id is required",
-        )
     if not isinstance(booking_id, str) or not booking_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -121,12 +114,6 @@ async def require_review_create_access(
         booking_id=booking_id,
         customer_id=customer_id,
     )
-
-    if payload_customer_id != customer_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="customer_id must match the authenticated customer",
-        )
 
     existing_review = await _find_customer_review_for_booking(
         customer_id=customer_id,

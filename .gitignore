@@ -6,7 +6,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+project_folder
 # C extensions
 *.so
 .github
@@ -146,7 +146,7 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
+MIGRATION_LOG.md
 # Pyre type checker
 .pyre/
 
@@ -166,11 +166,15 @@ cython_debug/
 ### Python Patch ###
 # Poetry local configuration file - https://python-poetry.org/docs/configuration/#local-configuration
 poetry.toml
-
+.venv-linux
 # ruff
 .ruff_cache/
-
+agents.md
+AUTH_STRATEGY.md
+CONTRIBUTING_AGENT_RULES.md
+design.md
+DOCS_INDEX.md
 # LSP config files
 pyrightconfig.json
-
+ENDPOINT_SUMMARIES.md
 # End of https://www.toptal.com/developers/gitignore/api/python

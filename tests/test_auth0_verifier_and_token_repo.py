@@ -60,3 +60,27 @@ async def test_resolve_access_token_id_accepts_object_id() -> None:
 @pytest.mark.asyncio
 async def test_resolve_access_token_id_rejects_non_object_id() -> None:
     assert await tokens_repo._resolve_access_token_id(accessToken="legacy.jwt.token", allow_expired=False) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_access_token_id_accepts_jwt_wrapped_object_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    token_id = str(ObjectId())
+
+    async def _stub_decode_jwt_token(*, token: str):
+        _ = token
+        return {"accessToken": token_id}
+
+    monkeypatch.setattr(tokens_repo, "decode_jwt_token", _stub_decode_jwt_token)
+    assert await tokens_repo._resolve_access_token_id(accessToken="jwt.token.value", allow_expired=False) == token_id
+
+
+@pytest.mark.asyncio
+async def test_resolve_access_token_id_accepts_expired_jwt_when_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    token_id = str(ObjectId())
+
+    async def _stub_decode_jwt_without_exp(*, token: str):
+        _ = token
+        return {"accessToken": token_id}
+
+    monkeypatch.setattr(tokens_repo, "decode_jwt_token_without_expiration", _stub_decode_jwt_without_exp)
+    assert await tokens_repo._resolve_access_token_id(accessToken="expired.jwt.token", allow_expired=True) == token_id

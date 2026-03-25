@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.responses import Response
 
+from core.i18n import get_request_locale, translate_message
+
 _RESPONSE_DOC_ATTR = "__response_doc_config__"
 
 
@@ -120,9 +122,10 @@ def _request_id_from_request(request: Request | None) -> str | None:
 
 def http_exception_response(exc: HTTPException, request: Request | None = None) -> JSONResponse:
     message, data = _parse_http_exception_detail(exc.detail)
+    localized_message = translate_message(message, get_request_locale(request))
     return error_response(
         status_code=exc.status_code,
-        message=message,
+        message=localized_message,
         data=data,
         request_id=_request_id_from_request(request),
         headers=exc.headers,
@@ -173,13 +176,14 @@ def document_response(
 
             request = _extract_request(*args, **kwargs)
             request_id = _request_id_from_request(request)
+            localized_message = translate_message(message, get_request_locale(request))
 
             return JSONResponse(
                 status_code=status_code,
                 content=jsonable_encoder(
                     success_payload(
                         data=data,
-                        message=message,
+                        message=localized_message,
                         meta=meta,
                         request_id=request_id,
                     )

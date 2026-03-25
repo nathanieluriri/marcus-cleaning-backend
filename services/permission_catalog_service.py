@@ -7,6 +7,11 @@ from fastapi import status
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 
+from core.endpoint_docs import (
+    build_endpoint_description,
+    build_endpoint_summary,
+    get_feature_purpose_for_route,
+)
 from core.errors import AppException, ErrorCode
 from schemas.imports import Permission, PermissionList
 from schemas.role_permission_template_schema import (
@@ -15,6 +20,11 @@ from schemas.role_permission_template_schema import (
     PermissionCatalogRouteItem,
 )
 from security.permissions import make_permission_key
+
+
+def _normalized_text(value: str | None) -> str | None:
+    text = (value or "").strip()
+    return text or None
 
 
 def _strip_v1_prefix(path: str) -> str:
@@ -66,6 +76,7 @@ def _is_assignable_api_route(route: APIRoute) -> bool:
 def build_permission_catalog_from_routes(routes: Iterable[object]) -> PermissionCatalogOut:
     items: list[PermissionCatalogRouteItem] = []
     seen_keys: set[str] = set()
+    feature_purpose_by_resource: dict[str, str] = {}
 
     for route in routes:
         if not isinstance(route, APIRoute):
@@ -81,6 +92,10 @@ def build_permission_catalog_from_routes(routes: Iterable[object]) -> Permission
         normalized_path = _strip_v1_prefix(route.path)
         endpoint_name = route.endpoint.__name__ if hasattr(route.endpoint, "__name__") else "unknown"
         requires_auth = _requires_auth(route.dependant)
+        endpoint_module = getattr(route.endpoint, "__module__", None)
+        feature_purpose = get_feature_purpose_for_route(module_name=endpoint_module)
+        if feature_purpose and resource not in feature_purpose_by_resource:
+            feature_purpose_by_resource[resource] = feature_purpose
 
         for method in methods:
             key = make_permission_key(method=method, path=normalized_path)
@@ -92,6 +107,18 @@ def build_permission_catalog_from_routes(routes: Iterable[object]) -> Permission
                     details={"key": key},
                 )
             seen_keys.add(key)
+            explicit_summary = _normalized_text(route.summary)
+            explicit_description = _normalized_text(route.description)
+            generated_summary = build_endpoint_summary(
+                method=method,
+                path=route.path,
+                module_name=endpoint_module,
+            )
+            generated_description = build_endpoint_description(
+                method=method,
+                path=route.path,
+                module_name=endpoint_module,
+            )
             items.append(
                 PermissionCatalogRouteItem(
                     resource=resource,
@@ -100,8 +127,8 @@ def build_permission_catalog_from_routes(routes: Iterable[object]) -> Permission
                     normalized_path=normalized_path,
                     key=key,
                     endpoint_name=endpoint_name,
-                    summary=route.summary,
-                    description=route.description,
+                    summary=explicit_summary or generated_summary,
+                    description=explicit_description or generated_description,
                     requires_auth=requires_auth,
                 )
             )
@@ -123,7 +150,11 @@ def build_permission_catalog_from_routes(routes: Iterable[object]) -> Permission
         )
 
     grouped = [
-        PermissionCatalogGroup(resource=resource, routes=grouped_map[resource])
+        PermissionCatalogGroup(
+            resource=resource,
+            featurePurpose=feature_purpose_by_resource.get(resource),
+            routes=grouped_map[resource],
+        )
         for resource in sorted(grouped_map)
     ]
     return PermissionCatalogOut(grouped=grouped, flat=PermissionList(permissions=flat_permissions))

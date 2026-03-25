@@ -25,6 +25,7 @@ from celery_worker import celery_app
 from core.payments.manager import PaymentManager
 from core.queue.celery_provider import CeleryQueueProvider
 from core.queue.manager import QueueManager
+from core.endpoint_docs import apply_feature_docs_to_routes
 from core.response_envelope import (
     apply_response_documentation,
     document_response,
@@ -35,7 +36,16 @@ from core.validation_errors import format_validation_error_details
 from core.scheduler import scheduler
 from core.settings import get_settings
 from core.role_config import build_role_rate_limits, build_role_rate_limits_csv, normalize_role
+from core.i18n import (
+    DEFAULT_LANGUAGE,
+    LocaleResolutionError,
+    parse_accept_language,
+    set_request_locale,
+    get_request_locale,
+    translate_message,
+)
 from core.storage.manager import DocumentStorageManager
+from repositories.tokens_repo import get_access_token
 from security.auth0_verifier import get_auth0_token_verifier
 from services.auth_identity_service import resolve_any_role_account_for_claims
 from services.customer_app_contract_service import process_due_account_lifecycle_jobs
@@ -66,6 +76,23 @@ class RequestTimingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class LocaleMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            header_locale = parse_accept_language(request.headers.get("Accept-Language"))
+        except LocaleResolutionError as err:
+            return error_response(
+                status_code=422,
+                message=translate_message(err.message, DEFAULT_LANGUAGE),
+                data={"code": "VALIDATION_FAILED", "details": {"field": "Accept-Language"}},
+                request_id=getattr(request.state, "request_id", None),
+            )
+        set_request_locale(request, header_locale)
+        response = await call_next(request)
+        response.headers["Content-Language"] = get_request_locale(request)
+        return response
+
+
 ROLE_RATE_LIMITS_DEFAULT = build_role_rate_limits_csv(non_admin_roles=["cleaner", "customer"])
 RATE_LIMITS = build_role_rate_limits(
     os.getenv("ROLE_RATE_LIMITS"),
@@ -84,6 +111,15 @@ async def get_user_type(request: Request) -> tuple[str, str]:
         return fallback_id, "anonymous"
 
     token = auth_header.split(" ", maxsplit=1)[1]
+    try:
+        local_token = await get_access_token(accessToken=token)
+    except Exception:
+        local_token = None
+    if local_token is not None:
+        local_role = normalize_role(local_token.role or "anonymous")
+        if local_role in RATE_LIMITS and local_token.userId:
+            return str(local_token.userId), local_role
+
     try:
         claims = await get_auth0_token_verifier().verify_access_token(token)
         role, account = await resolve_any_role_account_for_claims(claims=claims)
@@ -121,7 +157,7 @@ class RateLimitingMiddleware(BaseHTTPMiddleware):
             headers["Retry-After"] = str(seconds_until_reset)
             return error_response(
                 status_code=429,
-                message="Too Many Requests",
+                message=translate_message("Too Many Requests", get_request_locale(request)),
                 data={
                     "code": "TOO_MANY_REQUESTS",
                     "details": {
@@ -194,6 +230,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="REST API")
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(LocaleMiddleware)
 app.add_middleware(RequestTimingMiddleware)
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key or "dev-only-session-secret")
 app.add_middleware(RateLimitingMiddleware)
@@ -216,7 +253,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
     return error_response(
         status_code=422,
-        message="Validation error",
+        message=translate_message("Validation error", get_request_locale(request)),
         data={"code": "VALIDATION_FAILED", "details": format_validation_error_details(exc.errors())}, # type: ignore
         request_id=getattr(request.state, "request_id", None),
     )
@@ -227,7 +264,7 @@ async def custom_exception_handler(request: Request, exc: Exception):
     details = str(exc) if (settings.debug_include_error_details and not settings.is_production) else None
     return error_response(
         status_code=500,
-        message="Internal Server Error",
+        message=translate_message("Internal Server Error", get_request_locale(request)),
         data={"code": "INTERNAL_ERROR", "details": details},
         request_id=getattr(request.state, "request_id", None),
     )
@@ -333,4 +370,5 @@ app.include_router(v1_review_route_router, prefix='/v1')
 app.include_router(web_payment_template_router)
 # --- auto-routes-end ---
 
+apply_feature_docs_to_routes(app.routes)
 apply_response_documentation(app)

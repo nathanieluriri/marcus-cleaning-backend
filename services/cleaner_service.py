@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import os
+import time
 from bson import ObjectId
 from fastapi import HTTPException, status
 from typing import List
 
+from authlib.integrations.starlette_client import OAuth
 from core.cleaner_onboarding_cache import invalidate_cleaner_onboarding_cache
 from core.errors import AppException, ErrorCode
 from repositories.cleaner_repo import create_user, delete_user, get_user, get_users, update_user
+from repositories.tokens_repo import (
+    delete_access_token,
+    delete_all_tokens_with_user_id,
+    delete_refresh_token,
+    get_refresh_tokens,
+)
 from schemas.cleaner_schema import (
     CleanerCreate,
     CleanerLogin,
@@ -19,10 +28,18 @@ from schemas.cleaner_schema import (
     get_cleaner_profile_missing_fields,
 )
 from schemas.imports import AccountStatus, LoginType, OnboardingStatus
-from security.auth0_client import Auth0APIError, password_login, refresh_access_token, signup_email_password
-from security.auth0_verifier import Auth0Claims, get_auth0_token_verifier
-from services.auth_identity_service import refresh_account_after_update, resolve_role_account_for_claims
+from security.hash import check_password
+from services.auth_helpers import issue_tokens_for_user
 from services.role_permission_template_service import get_effective_permission_list_for_role
+
+oauth = OAuth()
+oauth.register(
+    name="google",
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
 
 
 def _email_name_parts(email: str) -> tuple[str, str]:
@@ -35,57 +52,12 @@ def _email_name_parts(email: str) -> tuple[str, str]:
     return parts[0].capitalize(), parts[1].capitalize()
 
 
-def _map_auth0_error(err: Auth0APIError) -> HTTPException:
-    if err.status_code in {400, 401, 403}:
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(err))
-    if err.status_code == 409:
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err))
-    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(err))
-
-
-async def _claims_from_access_token(access_token: str) -> Auth0Claims:
-    try:
-        return await get_auth0_token_verifier().verify_access_token(access_token)
-    except Exception as err:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Auth0 access token") from err
-
-
-async def _resolve_or_provision_cleaner(
-    *,
-    claims: Auth0Claims,
-    first_name: str | None = None,
-    last_name: str | None = None,
-    login_type: LoginType,
-    seed_password: str,
-) -> CleanerOut:
-    account = await resolve_role_account_for_claims(role="cleaner", claims=claims)
-    if account is not None:
-        return await refresh_account_after_update(role="cleaner", user_id=str(account.id))  # type: ignore[arg-type]
-
-    if not claims.email:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Auth0 token is missing email for cleaner provisioning",
-        )
-
-    inferred_first, inferred_last = _email_name_parts(claims.email)
-    permission_list = await get_effective_permission_list_for_role("cleaner")
-    created = await create_user(
-        CleanerCreate(
-            firstName=first_name or inferred_first,
-            lastName=last_name or inferred_last,
-            email=claims.email,
-            password=seed_password,
-            loginType=login_type,
-            accountStatus=AccountStatus.ACTIVE,
-            permissionList=permission_list,
-            auth_provider="auth0",
-            auth_subject=claims.sub,
-            email_verified=claims.email_verified,
-            last_auth_at=claims.iat,
-        )
-    )
-    return created
+async def _issue_and_attach_tokens(*, cleaner: CleanerOut) -> CleanerOut:
+    access_token, refresh_token = await issue_tokens_for_user(user_id=str(cleaner.id), role="cleaner")
+    cleaner.password = ""
+    cleaner.access_token = access_token
+    cleaner.refresh_token = refresh_token
+    return cleaner
 
 
 async def add_user(user_data: CleanerSignupRequest) -> CleanerOut:
@@ -93,59 +65,69 @@ async def add_user(user_data: CleanerSignupRequest) -> CleanerOut:
     if existing is not None:
         raise HTTPException(status_code=409, detail="Cleaner Already exists")
 
-    try:
-        await signup_email_password(email=str(user_data.email), password=str(user_data.password))
-        token_set = await password_login(email=str(user_data.email), password=str(user_data.password))
-    except Auth0APIError as err:
-        raise _map_auth0_error(err) from err
-
-    claims = await _claims_from_access_token(token_set.access_token)
-    cleaner = await _resolve_or_provision_cleaner(
-        claims=claims,
-        first_name=user_data.firstName,
-        last_name=user_data.lastName,
-        login_type=LoginType.email,
-        seed_password=str(user_data.password),
+    permission_list = await get_effective_permission_list_for_role("cleaner")
+    created = await create_user(
+        CleanerCreate(
+            firstName=user_data.firstName,
+            lastName=user_data.lastName,
+            email=user_data.email,
+            password=user_data.password,
+            loginType=LoginType.email,
+            accountStatus=AccountStatus.ACTIVE,
+            permissionList=permission_list,
+            auth_provider="local",
+            auth_subject=None,
+            email_verified=False,
+            last_auth_at=int(time.time()),
+        )
     )
-    cleaner.password = ""
-    cleaner.access_token = token_set.access_token
-    cleaner.refresh_token = token_set.refresh_token
-    return cleaner
+    return await _issue_and_attach_tokens(cleaner=created)
 
 
 async def authenticate_user(user_data: CleanerLogin) -> CleanerOut:
-    try:
-        token_set = await password_login(email=str(user_data.email), password=str(user_data.password))
-    except Auth0APIError as err:
-        raise _map_auth0_error(err) from err
+    cleaner = await get_user(filter_dict={"email": user_data.email})
+    if cleaner is None:
+        raise HTTPException(status_code=404, detail="Cleaner not found")
 
-    claims = await _claims_from_access_token(token_set.access_token)
-    cleaner = await _resolve_or_provision_cleaner(
-        claims=claims,
-        login_type=LoginType.email,
-        seed_password=str(user_data.password),
-    )
-    cleaner.password = ""
-    cleaner.access_token = token_set.access_token
-    cleaner.refresh_token = token_set.refresh_token
-    return cleaner
+    if not check_password(password=str(user_data.password), hashed=cleaner.password):  # type: ignore[arg-type]
+        raise HTTPException(status_code=401, detail="Unathorized, Invalid Login credentials")
+
+    if cleaner.auth_provider != "local" or cleaner.auth_subject:
+        cleaner = await update_user_by_id(
+            user_id=str(cleaner.id),
+            user_data=CleanerUpdate(
+                auth_provider="local",
+                auth_subject=None,
+                last_auth_at=int(time.time()),
+            ),
+        )
+    else:
+        cleaner = await update_user_by_id(
+            user_id=str(cleaner.id),
+            user_data=CleanerUpdate(last_auth_at=int(time.time())),
+        )
+
+    return await _issue_and_attach_tokens(cleaner=cleaner)
 
 
 async def refresh_user_tokens_reduce_number_of_logins(user_refresh_data: CleanerRefresh, expired_access_token: str):
-    _ = expired_access_token
-    try:
-        token_set = await refresh_access_token(refresh_token=user_refresh_data.refresh_token)
-    except Auth0APIError as err:
-        raise _map_auth0_error(err) from err
+    refresh_obj = await get_refresh_tokens(user_refresh_data.refresh_token)
+    if refresh_obj is None:
+        raise HTTPException(status_code=404, detail="Invalid refresh token")
 
-    claims = await _claims_from_access_token(token_set.access_token)
-    account = await resolve_role_account_for_claims(role="cleaner", claims=claims)
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cleaner not found")
-    cleaner = await refresh_account_after_update(role="cleaner", user_id=str(account.id))  # type: ignore[arg-type]
-    cleaner.password = ""
-    cleaner.access_token = token_set.access_token
-    cleaner.refresh_token = token_set.refresh_token or user_refresh_data.refresh_token
+    if expired_access_token and refresh_obj.previousAccessToken != expired_access_token:
+        await delete_refresh_token(refreshToken=user_refresh_data.refresh_token)
+        raise HTTPException(status_code=404, detail="Invalid refresh token")
+
+    cleaner = await retrieve_user_by_user_id(id=refresh_obj.userId)
+    cleaner = await update_user_by_id(
+        user_id=str(cleaner.id),
+        user_data=CleanerUpdate(last_auth_at=int(time.time())),
+    )
+    cleaner = await _issue_and_attach_tokens(cleaner=cleaner)
+
+    await delete_access_token(accessToken=refresh_obj.previousAccessToken)
+    await delete_refresh_token(refreshToken=user_refresh_data.refresh_token)
     return cleaner
 
 
@@ -154,6 +136,7 @@ async def remove_user(user_id: str):
         raise HTTPException(status_code=400, detail="Invalid cleaner ID format")
 
     result = await delete_user({"_id": ObjectId(user_id)})
+    await delete_all_tokens_with_user_id(userId=user_id)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cleaner not found")
 
@@ -235,4 +218,35 @@ async def review_cleaner_onboarding(
 
 
 async def authenticate_user_google(user_data: CleanerSignupRequest) -> CleanerOut:
-    return await add_user(user_data=user_data)
+    cleaner = await get_user(filter_dict={"email": user_data.email})
+    if cleaner is None:
+        permission_list = await get_effective_permission_list_for_role("cleaner")
+        first_name = user_data.firstName or _email_name_parts(str(user_data.email))[0]
+        last_name = user_data.lastName or _email_name_parts(str(user_data.email))[1]
+        cleaner = await create_user(
+            CleanerCreate(
+                firstName=first_name,
+                lastName=last_name,
+                email=user_data.email,
+                password=user_data.password or "",
+                loginType=LoginType.google,
+                accountStatus=AccountStatus.ACTIVE,
+                permissionList=permission_list,
+                auth_provider="local",
+                auth_subject=None,
+                email_verified=True,
+                last_auth_at=int(time.time()),
+            )
+        )
+    else:
+        cleaner = await update_user_by_id(
+            user_id=str(cleaner.id),
+            user_data=CleanerUpdate(
+                auth_provider="local",
+                auth_subject=None,
+                email_verified=True,
+                last_auth_at=int(time.time()),
+            ),
+        )
+
+    return await _issue_and_attach_tokens(cleaner=cleaner)

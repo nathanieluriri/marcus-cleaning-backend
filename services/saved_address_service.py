@@ -14,12 +14,13 @@ from repositories.saved_address_repo import (
     update_saved_address_for_user,
 )
 from schemas.saved_address import (
+    CustomerSavedAddressCreateRequest,
     SavedAddressCreate,
-    SavedAddressCreateRequest,
     SavedAddressOut,
     SavedAddressPatchRequest,
     SavedAddressUpdate,
 )
+from services.place_service import get_place_details
 
 
 def _epoch() -> int:
@@ -30,27 +31,33 @@ async def list_my_saved_addresses(*, user_id: str, start: int = 0, stop: int = 1
     return await list_saved_addresses_for_user(user_id=user_id, start=start, stop=stop)
 
 
-async def create_my_saved_address(*, user_id: str, payload: SavedAddressCreateRequest) -> SavedAddressOut:
+async def create_my_saved_address(
+    *,
+    user_id: str,
+    payload: CustomerSavedAddressCreateRequest,
+    created_by_admin_id: str | None = None,
+) -> SavedAddressOut:
     existing = await list_saved_addresses_for_user(user_id=user_id, start=0, stop=1)
     should_default = bool(payload.isDefault) or len(existing) == 0
+    place = await get_place_details(place_id=payload.place_id)
     if should_default:
         await clear_default_for_user(user_id=user_id)
     return await create_saved_address(
         SavedAddressCreate(
             user_id=user_id,
             label=payload.label,
-            addressLine=payload.addressLine,
-            place=payload.place,
+            place=place,
             isDefault=should_default,
+            created_by_admin_id=created_by_admin_id,
         )
     )
 
 
 async def update_my_saved_address(*, user_id: str, address_id: str, payload: SavedAddressPatchRequest) -> SavedAddressOut:
+    place = await get_place_details(place_id=payload.place_id) if payload.place_id else None
     update_payload = SavedAddressUpdate(
         label=payload.label,
-        addressLine=payload.addressLine,
-        place=payload.place,
+        place=place,
     )
     updated = await update_saved_address_for_user(
         address_id=address_id,

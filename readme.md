@@ -162,18 +162,31 @@ Mounted routers in `main.py`:
 
 - `/v1/admins`
   - admin auth/profile
+  - admin language preference endpoints (`GET|PATCH /v1/admins/profile/language`)
   - permission templates + rollout
   - permission catalog (`GET /v1/admins/permissions/catalog`)
+  - user picker autocomplete (`GET /v1/admins/users/autocomplete`) for cross-role search (customer + cleaner) by email/name/id
+  - customer places lookup for concierge (`GET /v1/admins/customers/{customer_id}/places`) returning `PlaceOut[]`
+  - customer place creation for concierge/support (`POST /v1/admins/customers/{customer_id}/places`) with `label`, `place_id`, optional `isDefault`; admin attribution is token-derived in backend
+  - concierge create-booking flow uses booking payload shape (`BookingBase`) and derives actor admin from token context
+  - concierge cleaner selection enforces cleaner profile flag `allow_admin_selection=true`
+  - booking and concierge lifecycle statuses are system-owned and transition through backend state-machine rules
 - `/v1/customers`
   - signup/login/refresh/account
+  - preferred language endpoints (`GET|PATCH /v1/customers/me/language`)
   - Google OAuth routes
+  - saved-address create/update now take `place_id` input and server-resolve `place` details
+  - contract auth aliases (`/sign-in`, `/sign-up`, `/password-reset/request`)
 - `/v1/cleaners`
   - signup/login/refresh/account
+  - preferred language endpoints (`GET|PATCH /v1/cleaners/me/language`)
   - Google OAuth routes
 - `/v1/bookings`
-  - create/list/get
+  - create/list/get (customer identity for create is token-derived, not request-body self-id)
   - cleaner accept/complete
   - customer acknowledge completion
+  - customer mark-paid aliases (`POST|PATCH /v1/bookings/{booking_id}/payments/mark-paid`)
+  - customer booking rating submit (`POST /v1/bookings/{booking_id}/ratings`)
 - `/v1/places`
   - allowed countries
   - autocomplete/details/reverse geocode
@@ -187,6 +200,13 @@ Mounted routers in `main.py`:
   - webhook receiver
   - fetch by id/reference
   - refund
+  - payment-method CRUD under `/v1/payments/methods/*`
+- `/v1/profile`
+  - profile aliases for customer profile, addresses, and payment-method CRUD
+- `/v1/settings`
+  - notification/security/privacy patches
+  - session controls (`revoke-others`, `revoke-all`, `logout`, and targeted `DELETE /v1/settings/security/sessions/{session_id}`)
+  - account lifecycle endpoints (`POST /v1/settings/account/deactivate`, `POST /v1/settings/account/delete`, `DELETE /v1/settings/account`)
 - `/web/payments`
   - `GET /web/payments/template`
   - `GET /web/payments/link/{reference}`
@@ -225,6 +245,13 @@ Most endpoints return a standard shape:
 }
 ```
 
+Localization behavior:
+- Supported response languages are `en` and `fr`.
+- `Accept-Language` is validated to supported values only (`en`/`fr` family).
+- For authenticated routes, account `preferredLanguage` takes precedence.
+- If no profile language is set, default language is `en`.
+- Auth token responses include top-level `language`.
+
 Validation and error responses keep the same envelope with `success: false`.
 
 ## Health Checks
@@ -245,8 +272,43 @@ pytest
 
 Test files are in `tests/` (payments, bookings, permissions, places, queue, settings validation, etc.).
 
+## Documentation Governance
+
+Mandatory documentation for contributors/agents:
+
+- `DOCS_INDEX.md` (documentation map and update matrix)
+- `agents.md` (working contract and non-negotiable instructions)
+- `design.md` (architecture and migration direction)
+- `AUTH_STRATEGY.md` (role-based auth source-of-truth)
+- `MIGRATION_LOG.md` (implemented/planned migration entries)
+- `CONTRIBUTING_AGENT_RULES.md` (workflow and done criteria)
+- `ENDPOINT_SUMMARIES.md` (feature-level API behavior summaries)
+
+Change policy:
+
+- Always update `readme.md` and `ENDPOINT_SUMMARIES.md` when behavior or endpoint contracts change.
+- Update migration and auth docs whenever role auth flow or source-of-truth changes.
+
+## Authentication Strategy
+
+Current auth split:
+
+- Admin auth: Auth0-backed.
+- Cleaner and customer auth: local backend auth.
+
+This split is intentional for current delivery velocity and lower bug-fix turnaround on user-facing auth paths. See `AUTH_STRATEGY.md` and `design.md` for detailed rationale and migration posture.
+
 ## Additional Docs
 
+- `DOCS_INDEX.md`
+- `agents.md`
+- `design.md`
+- `AUTH_STRATEGY.md`
+- `MIGRATION_LOG.md`
+- `CONTRIBUTING_AGENT_RULES.md`
+- `ADMIN_CONCIERGE_BOOKING_FRONTEND_FLOW.md`
+- `docs/ADMIN_ENDPOINTS_AND_PERMISSION_GROUPS_FRONTEND_GUIDE.md`
+- `docs/ADMIN_CONCIERGE_BOOKING_FRONTEND_FLOW.md`
 - `docs/auth0_tenant_baseline.md`
 - `docs/runbooks/auth_incident_response.md`
 - `docs/runbooks/auth0_outage_and_key_rotation.md`

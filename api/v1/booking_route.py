@@ -6,11 +6,13 @@ from core.response_envelope import document_response
 from core.settings import get_settings
 from schemas.booking import (
     BookingBase,
+    BookingCustomerCreateRequest,
     BookingHistoryScheduledSort,
     BookingHistoryScope,
     BookingOut,
     BookingPaymentStatus,
 )
+from schemas.customer_app_contract import BookingRatingRequestContract
 from schemas.imports import BookingStatus
 from security.booking_access_check import (
     require_booking_principal,
@@ -24,6 +26,8 @@ from services.booking_service import (
     accept_booking,
     complete_booking,
     create_booking_for_customer,
+    mark_booking_paid_by_customer,
+    rate_booking_by_customer,
     retrieve_bookings_for_principal,
 )
 
@@ -33,7 +37,7 @@ router = APIRouter(prefix="/bookings", tags=["Bookings"])
 @router.post("/")
 @document_response(message="Booking created successfully", status_code=status.HTTP_201_CREATED)
 async def create_booking(
-    payload: BookingBase,
+    payload: BookingCustomerCreateRequest,
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):
     return await create_booking_for_customer(principal=principal, payload=payload)
@@ -51,11 +55,16 @@ async def list_bookings(
     page_size_camel: int | None = Query(default=None, alias="pageSize", ge=1, le=100),
     scheduled_sort: BookingHistoryScheduledSort = Query(default=BookingHistoryScheduledSort.DESC),
     scheduled_sort_camel: BookingHistoryScheduledSort | None = Query(default=None, alias="scheduledSort"),
+    sort: str | None = Query(default=None),
     principal: AuthPrincipal = Depends(require_booking_principal),
 ):
     effective_payment_status = payment_status_camel or payment_status
     effective_page_size = page_size_camel if page_size_camel is not None else page_size
     effective_scheduled_sort = scheduled_sort_camel or scheduled_sort
+    if sort == "scheduledAt_asc":
+        effective_scheduled_sort = BookingHistoryScheduledSort.ASC
+    elif sort == "scheduledAt_desc":
+        effective_scheduled_sort = BookingHistoryScheduledSort.DESC
     return await retrieve_bookings_for_principal(
         principal=principal,
         status_filter=status_filter,
@@ -107,3 +116,36 @@ async def acknowledge_completion(
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):
     return await acknowledge_booking_completion(booking_id=booking_id, principal=principal)
+
+
+@router.post("/{booking_id}/payments/mark-paid")
+@document_response(message="Booking payment marked as paid")
+async def mark_booking_paid(
+    booking_id: str = Path(..., description="Booking identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await mark_booking_paid_by_customer(booking_id=booking_id, principal=principal)
+
+
+@router.patch("/{booking_id}/payments/mark-paid")
+@document_response(message="Booking payment marked as paid")
+async def mark_booking_paid_patch(
+    booking_id: str = Path(..., description="Booking identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await mark_booking_paid_by_customer(booking_id=booking_id, principal=principal)
+
+
+@router.post("/{booking_id}/ratings")
+@document_response(message="Booking rated successfully")
+async def rate_booking(
+    payload: BookingRatingRequestContract,
+    booking_id: str = Path(..., description="Booking identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await rate_booking_by_customer(
+        booking_id=booking_id,
+        principal=principal,
+        rating=payload.rating,
+        comment=payload.comment,
+    )

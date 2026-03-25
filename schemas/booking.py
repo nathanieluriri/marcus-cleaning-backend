@@ -11,6 +11,8 @@ class BookingHistoryScope(str, Enum):
     ALL = "all"
     UPCOMING = "upcoming"
     PAST = "past"
+    CURRENT = "current"
+    HISTORY = "history"
 
 
 class BookingHistoryScheduledSort(str, Enum):
@@ -54,6 +56,35 @@ class BookingBase(BaseModel):
         if self.service != CleaningServices.CUSTOM and self.custom_details is not None:
             raise ValueError("custom_details is only allowed when service is CUSTOM")
             
+        return self
+
+
+class BookingCustomerCreateRequest(BaseModel):
+    place_id: str
+    cleaner_id: str
+    # Unix timestamp
+    schedule: int = Field(
+        description="Unix timestamp. Must be at least 1 hour in the future."
+    )
+    extras: Extra = Field(default_factory=Extra)
+    service: CleaningServices
+    duration: Duration
+    custom_details: Optional[CustomServiceDetails] = None
+
+    @model_validator(mode="after")
+    def validate_booking(self) -> "BookingCustomerCreateRequest":
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        one_hour_from_now = now_ts + 3600
+
+        if self.schedule < one_hour_from_now:
+            raise ValueError("The scheduled time must be at least 1 hour from now.")
+
+        if self.service == CleaningServices.CUSTOM and self.custom_details is None:
+            raise ValueError("custom_details is required when service is CUSTOM")
+
+        if self.service != CleaningServices.CUSTOM and self.custom_details is not None:
+            raise ValueError("custom_details is only allowed when service is CUSTOM")
+
         return self
 
 class BookingCreate(BookingBase):

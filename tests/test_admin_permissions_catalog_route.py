@@ -46,8 +46,8 @@ def test_admin_permission_catalog_route_returns_grouped_and_flat():
     data = payload["data"]
     assert "grouped" in data
     assert "flat" in data
+    assert "featurePurpose" in data["grouped"][0]
 
     keys = [item["key"] for item in data["flat"]["permissions"]]
     assert "GET:/customers/me" in keys
     assert all(not key.startswith("GET:/admins") for key in keys)
-

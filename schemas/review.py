@@ -17,6 +17,12 @@ class ReviewBase(BaseModel):
     comment:str = Field(min_length=10)
     stars:int=Field(ge=0,le=5)
 
+
+class ReviewCreateRequest(BaseModel):
+    booking_id: str
+    comment: str = Field(min_length=10)
+    stars: int = Field(ge=0, le=5)
+
 class ReviewCreate(ReviewBase):
     # Add other fields here
     cleaner_id:str 

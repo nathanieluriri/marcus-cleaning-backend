@@ -1,7 +1,9 @@
 import os
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
+from pydantic import BaseModel
 
 from core.response_envelope import document_response
 from schemas.customer_app_contract import (
@@ -11,6 +13,7 @@ from schemas.customer_app_contract import (
     AuthSignInRequestContract,
     AuthSignUpRequestContract,
     BookingCreateRequestContract,
+    PrivacyPreferencesPatchContract,
     CustomerProfileEditRequestContract,
     CleanerFiltersContract,
     CleanerReviewFiltersContract,
@@ -18,14 +21,20 @@ from schemas.customer_app_contract import (
     SecurityPreferencesPatchContract,
 )
 from schemas.customer_schema import CustomerLogin, CustomerOut, CustomerRefresh, CustomerSignupRequest
-from schemas.saved_address import SavedAddressCreateRequest, SavedAddressPatchRequest
+from schemas.customer_schema import CustomerUpdate
+from schemas.payment_schema import PaymentMethodCreateIn, PaymentMethodUpdateIn
+from schemas.saved_address import CustomerSavedAddressCreateRequest, SavedAddressPatchRequest
 from security.booking_access_check import require_customer_principal
 from services.customer_service import (
     add_user,
     authenticate_user,
+    authenticate_user_google,
+    oauth,
     refresh_user_tokens_reduce_number_of_logins,
     remove_user,
     retrieve_users,
+    retrieve_user_by_user_id,
+    update_user_by_id,
 )
 from services.saved_address_service import (
     create_my_saved_address,
@@ -38,6 +47,7 @@ from services.customer_app_contract_service import (
     create_booking_contract,
     delete_notification_contract,
     fetch_customer_home_page,
+    get_customer_profile_contract,
     fetch_settings_snapshot_contract,
     get_cleaner_profile_contract,
     list_booking_extras_by_service,
@@ -49,16 +59,25 @@ from services.customer_app_contract_service import (
     request_password_reset_contract,
     request_account_deactivation_contract,
     request_account_deletion_contract,
+    revoke_session_by_id_contract,
     revoke_other_sessions_contract,
     sign_in_customer_contract,
     sign_up_customer_contract,
     update_notification_preferences_contract,
+    update_privacy_preferences_contract,
     update_security_preferences_contract,
     update_customer_profile_contract,
 )
 from services.auth_session_service import revoke_all_sessions, revoke_current_session
+from services.payment_service import (
+    add_payment_method_for_owner,
+    delete_payment_method_for_owner,
+    list_payment_methods_for_owner,
+    update_payment_method_for_owner,
+)
 from security.account_status_check import check_user_account_status_and_permissions
 from security.principal import AuthPrincipal
+from core.i18n import set_request_locale
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 customer_app_router = APIRouter(tags=["Customers"])
@@ -67,22 +86,51 @@ SUCCESS_PAGE_URL = os.getenv("SUCCESS_PAGE_URL", "http://localhost:8080/success"
 ERROR_PAGE_URL = os.getenv("ERROR_PAGE_URL", "http://localhost:8080/error")
 
 
+class LanguageUpdateIn(BaseModel):
+    language: Literal["en", "fr"]
+
+
+def _with_language(payload: object, language: str | None) -> dict:
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(mode="json", by_alias=True) # type: ignore[attr-defined]
+    elif isinstance(payload, dict):
+        data = dict(payload)
+    else:
+        data = {"value": payload}
+    data["language"] = language or "en"
+    return data
+
+
 @router.get("/google/auth")
 async def login_with_google_account(request: Request):
-    _ = request
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail="Google login is now handled by Auth0 Universal Login",
-    )
+    redirect_uri = request.url_for("customer_auth_callback")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
-@router.get("/auth/callback")
+@router.get("/auth/callback", name="customer_auth_callback")
 async def auth_callback_user(request: Request):
-    _ = request
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail="Google callback is now handled by Auth0 Universal Login",
+    token = await oauth.google.authorize_access_token(request)
+    user_info = token.get("userinfo") if isinstance(token, dict) else None
+    if not isinstance(user_info, dict):
+        raise HTTPException(status_code=400, detail={"message": "No customer info found"})
+
+    full_name = str(user_info.get("name") or "").strip()
+    first_name = str(user_info.get("given_name") or full_name or "Customer").strip()
+    last_name = str(user_info.get("family_name") or "").strip()
+    email = str(user_info.get("email") or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail={"message": "Google email not found"})
+
+    customer = await authenticate_user_google(
+        user_data=CustomerSignupRequest(
+            firstName=first_name,
+            lastName=last_name,
+            email=email,
+            password="",
+        )
     )
+    success_url = f"{SUCCESS_PAGE_URL}?access_token={customer.access_token}&refresh_token={customer.refresh_token}"
+    return RedirectResponse(url=success_url, status_code=status.HTTP_302_FOUND)
 
 
 @router.get(
@@ -123,28 +171,32 @@ async def update_my_profile(
     message="Customer created successfully",
     status_code=status.HTTP_201_CREATED,
 )
-async def signup_new_user(user_data: CustomerSignupRequest):
+async def signup_new_user(request: Request, user_data: CustomerSignupRequest):
     items = await add_user(user_data=user_data)
-    return items
+    set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+    return _with_language(items, getattr(items, "preferredLanguage", "en"))
 
 
 @router.post("/login")
 @document_response(message="Login successful")
-async def login_user(user_data: CustomerLogin):
+async def login_user(request: Request, user_data: CustomerLogin):
     items = await authenticate_user(user_data=user_data)
-    return items
+    set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+    return _with_language(items, getattr(items, "preferredLanguage", "en"))
 
 
 @router.post("/refresh")
 @document_response(message="Tokens refreshed successfully")
 async def refresh_user_tokens(
+    request: Request,
     user_data: CustomerRefresh,
 ):
     items = await refresh_user_tokens_reduce_number_of_logins(
         user_refresh_data=user_data,
         expired_access_token="",
     )
-    return items
+    set_request_locale(request, getattr(items, "preferredLanguage", "en"))
+    return _with_language(items, getattr(items, "preferredLanguage", "en"))
 
 
 @router.delete("/account")
@@ -167,7 +219,7 @@ async def list_my_addresses(
 @router.post("/me/addresses", status_code=status.HTTP_201_CREATED)
 @document_response(message="Saved address created successfully", status_code=status.HTTP_201_CREATED)
 async def create_my_address(
-    payload: SavedAddressCreateRequest,
+    payload: CustomerSavedAddressCreateRequest,
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):
     return await create_my_saved_address(user_id=principal.user_id, payload=payload)
@@ -176,8 +228,8 @@ async def create_my_address(
 @router.patch("/me/addresses/{address_id}")
 @document_response(message="Saved address updated successfully")
 async def update_my_address(
+    payload: SavedAddressPatchRequest ,
     address_id: str = Path(..., description="Saved address identifier"),
-    payload: SavedAddressPatchRequest = ...,
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):
     return await update_my_saved_address(user_id=principal.user_id, address_id=address_id, payload=payload)
@@ -201,16 +253,47 @@ async def set_default_my_address(
     return await set_default_saved_address(user_id=principal.user_id, address_id=address_id)
 
 
+@router.get("/me/language")
+@document_response(message="Language fetched successfully")
+async def get_customer_language(
+    request: Request,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    customer = await retrieve_user_by_user_id(id=principal.user_id)
+    language = getattr(customer, "preferredLanguage", "en")
+    set_request_locale(request, language)
+    return {"language": language}
+
+
+@router.patch("/me/language")
+@document_response(message="Language updated successfully")
+async def update_customer_language(
+    payload: LanguageUpdateIn,
+    request: Request,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    updated = await update_user_by_id(
+        user_id=principal.user_id,
+        user_data=CustomerUpdate(preferredLanguage=payload.language),
+    )
+    set_request_locale(request, payload.language)
+    return {"language": getattr(updated, "preferredLanguage", payload.language)}
+
+
 @router.post("/sign-in")
 @document_response(message="Login successful")
-async def sign_in(payload: AuthSignInRequestContract):
-    return await sign_in_customer_contract(payload)
+async def sign_in(request: Request, payload: AuthSignInRequestContract):
+    response = await sign_in_customer_contract(payload)
+    set_request_locale(request, getattr(response, "language", "en"))
+    return response
 
 
 @router.post("/sign-up")
 @document_response(message="Customer created successfully", status_code=status.HTTP_201_CREATED)
-async def sign_up(payload: AuthSignUpRequestContract):
-    return await sign_up_customer_contract(payload)
+async def sign_up(request: Request, payload: AuthSignUpRequestContract):
+    response = await sign_up_customer_contract(payload)
+    set_request_locale(request, getattr(response, "language", "en"))
+    return response
 
 
 @router.post("/password-reset/request")
@@ -378,6 +461,7 @@ async def revoke_all_customer_sessions(
     access_deleted, refresh_deleted = await revoke_all_sessions(
         user_id=principal.user_id,
         auth_subject=principal.auth_subject,
+        auth_provider=principal.auth_provider,
     )
     return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
 
@@ -391,6 +475,7 @@ async def logout_customer_session(
         user_id=principal.user_id,
         current_access_token_id=principal.access_token_id,
         auth_subject=principal.auth_subject,
+        auth_provider=principal.auth_provider,
     )
     return {"revokedAccessSessions": access_deleted, "revokedRefreshSessions": refresh_deleted}
 
@@ -410,6 +495,147 @@ async def request_account_deactivation(
 @customer_app_router.post("/settings/account/delete")
 @document_response(message="Account deletion request accepted")
 async def request_account_deletion(
+    payload: AccountDeleteRequestContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await request_account_deletion_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.get("/profile/me")
+@document_response(message="Customer profile fetched successfully")
+async def fetch_profile_me(
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await get_customer_profile_contract(customer_id=principal.user_id)
+
+
+@customer_app_router.patch("/profile/me")
+@document_response(message="Customer profile updated successfully")
+async def patch_profile_me(
+    payload: CustomerProfileEditRequestContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_customer_profile_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.get("/profile/addresses")
+@document_response(message="Saved addresses fetched successfully", success_example=[])
+async def list_profile_addresses(
+    cursor: str | None = Query(default=None),
+    page_size: int = Query(default=20, alias="pageSize", ge=1, le=100),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    start = int(cursor) if cursor and cursor.isdigit() else 0
+    stop = start + page_size
+    return await list_my_saved_addresses(user_id=principal.user_id, start=start, stop=stop)
+
+
+@customer_app_router.post("/profile/addresses", status_code=status.HTTP_201_CREATED)
+@document_response(message="Saved address created successfully", status_code=status.HTTP_201_CREATED)
+async def create_profile_address(
+    payload: CustomerSavedAddressCreateRequest,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await create_my_saved_address(user_id=principal.user_id, payload=payload)
+
+
+@customer_app_router.patch("/profile/addresses/{address_id}")
+@document_response(message="Saved address updated successfully")
+async def patch_profile_address(
+    payload: SavedAddressPatchRequest,
+    address_id: str = Path(..., description="Saved address identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_my_saved_address(user_id=principal.user_id, address_id=address_id, payload=payload)
+
+
+@customer_app_router.delete("/profile/addresses/{address_id}")
+@document_response(message="Saved address deleted successfully")
+async def remove_profile_address(
+    address_id: str = Path(..., description="Saved address identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await delete_my_saved_address(user_id=principal.user_id, address_id=address_id)
+
+
+@customer_app_router.get("/profile/payment-methods")
+@document_response(message="Payment methods fetched successfully", success_example=[])
+async def list_profile_payment_methods(
+    cursor: str | None = Query(default=None),
+    page_size: int = Query(default=20, alias="pageSize", ge=1, le=100),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    start = int(cursor) if cursor and cursor.isdigit() else 0
+    stop = start + page_size
+    return await list_payment_methods_for_owner(owner_id=principal.user_id, start=start, stop=stop)
+
+
+@customer_app_router.post("/profile/payment-methods", status_code=status.HTTP_201_CREATED)
+@document_response(message="Payment method created successfully", status_code=status.HTTP_201_CREATED)
+async def create_profile_payment_method(
+    payload: PaymentMethodCreateIn,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await add_payment_method_for_owner(owner_id=principal.user_id, payload=payload)
+
+
+@customer_app_router.patch("/profile/payment-methods/{payment_method_id}")
+@document_response(message="Payment method updated successfully")
+async def patch_profile_payment_method(
+    payload: PaymentMethodUpdateIn,
+    payment_method_id: str = Path(..., description="Payment method identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_payment_method_for_owner(
+        owner_id=principal.user_id,
+        method_id=payment_method_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.delete("/profile/payment-methods/{payment_method_id}")
+@document_response(message="Payment method deleted successfully")
+async def remove_profile_payment_method(
+    payment_method_id: str = Path(..., description="Payment method identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await delete_payment_method_for_owner(owner_id=principal.user_id, method_id=payment_method_id)
+
+
+@customer_app_router.patch("/settings/privacy")
+@document_response(message="Privacy preferences updated successfully")
+async def patch_privacy_preferences(
+    payload: PrivacyPreferencesPatchContract,
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await update_privacy_preferences_contract(
+        customer_id=principal.user_id,
+        payload=payload,
+    )
+
+
+@customer_app_router.delete("/settings/security/sessions/{session_id}")
+@document_response(message="Session revoked successfully")
+async def revoke_customer_session_by_id(
+    session_id: str = Path(..., description="Access-token session identifier"),
+    principal: AuthPrincipal = Depends(require_customer_principal),
+):
+    return await revoke_session_by_id_contract(
+        customer_id=principal.user_id,
+        current_access_token_id=principal.access_token_id,
+        session_id=session_id,
+    )
+
+
+@customer_app_router.delete("/settings/account")
+@document_response(message="Account deletion request accepted")
+async def delete_account_alias(
     payload: AccountDeleteRequestContract,
     principal: AuthPrincipal = Depends(require_customer_principal),
 ):

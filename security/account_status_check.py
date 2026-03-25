@@ -8,6 +8,7 @@ from typing import Final
 from fastapi import Depends, Request, status
 
 from core.errors import AppException, ErrorCode, auth_permission_denied, auth_role_mismatch
+from core.i18n import set_request_locale
 from schemas.imports import AccountStatus, PermissionList
 from security.auth import verify_admin_token, verify_any_token, verify_cleaner_token, verify_customer_token
 from security.cleaner_onboarding_check import enforce_cleaner_onboarding_gate
@@ -142,6 +143,7 @@ async def _check_non_admin_account_status_and_permissions(
             cleaner=account,
         )
 
+    set_request_locale(request, getattr(account, "preferredLanguage", None))
     return account
 
 
@@ -168,6 +170,7 @@ async def check_admin_account_status_and_permissions(
         admin_id=getattr(admin, "id", None),
         admin_email=getattr(admin, "email", None),
     ):
+        set_request_locale(request, getattr(admin, "preferredLanguage", None))
         return admin
 
     endpoint_name, request_method, permission_key = _build_permission_context(request)
@@ -182,6 +185,7 @@ async def check_admin_account_status_and_permissions(
     ):
         raise auth_permission_denied(permission_key)
 
+    set_request_locale(request, getattr(admin, "preferredLanguage", None))
     return admin
 
 
