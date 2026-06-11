@@ -8,6 +8,7 @@ import * as customerService from '@/server/services/customer-service'
 import type { AppContext } from '@/server/core/http-env'
 import { PasswordResetRequest, PasswordResetConfirm } from '@/server/schemas/password-reset'
 import * as passwordResetService from '@/server/services/password-reset-service'
+import { getSettings } from '@/server/core/settings'
 
 /**
  * /v1/customers — auth slice (signup / login / refresh).
@@ -125,8 +126,9 @@ customers.openapi(
   }),
   async (c) => {
     const { email } = c.req.valid('json')
-    const origin = new URL(c.req.url).origin
-    await passwordResetService.requestReset(email, (token) => `${origin}/reset-password?token=${token}`)
+    // Trusted, server-configured base URL — never the request Host (prevents reset-link poisoning).
+    const base = getSettings().PUBLIC_APP_URL.replace(/\/$/, '')
+    await passwordResetService.requestReset(email, (token) => `${base}/reset-password?token=${token}`)
     return c.json(ok(c, 'If that email exists, a reset link has been sent', null), 200)
   },
 )

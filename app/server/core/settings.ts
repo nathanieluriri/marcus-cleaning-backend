@@ -78,6 +78,9 @@ const EnvSchema = z
 
     // misc
     CORS_ORIGINS: z.string().optional(),
+    // Trusted base URL for user-facing links (e.g. password-reset). NEVER derive
+    // this from the request Host header — that enables reset-link poisoning.
+    PUBLIC_APP_URL: z.string().default('https://marcus-cleaning-backend.vercel.app'),
     BOOKING_ALLOW_ACCEPT_ON_PENDING_PAYMENT: boolFromEnv(false),
     PAYMENT_RECONCILE_POLL_LIMIT: z.coerce.number().int().positive().default(50),
     SUPER_ADMIN_EMAIL: z.string().optional(),
