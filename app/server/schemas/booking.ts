@@ -47,10 +47,23 @@ export const BookingCustomerCreateRequest = z
     /** Scheduled start time as a unix epoch (seconds). */
     schedule: z.number().int().openapi({ example: 1750000000 }),
     addons: z.array(BookingAddon).default([]),
+    /** Legacy app alias: a flat list of add-on ids. Coalesced via resolveAddons(). */
+    extras: z.array(z.string()).optional(),
     notes: z.string().nullable().optional(),
   })
   .openapi('BookingCustomerCreateRequest')
 export type BookingCustomerCreateRequest = z.infer<typeof BookingCustomerCreateRequest>
+
+/**
+ * Coalesce the structured `addons` and the legacy flat `extras` id-list into the
+ * canonical BookingAddon[]. Structured addons win; otherwise each extra id
+ * becomes a quantity-1 add-on. See spec §5.3.
+ */
+export function resolveAddons(input: { addons?: BookingAddon[]; extras?: string[] }): BookingAddon[] {
+  if (input.addons && input.addons.length > 0) return input.addons
+  if (input.extras && input.extras.length > 0) return input.extras.map((addonId) => ({ addonId, quantity: 1 }))
+  return []
+}
 
 /** Mark-paid request (POST + PATCH aliases). Payment id links to `payments`. */
 export const BookingMarkPaidRequest = z
@@ -191,6 +204,8 @@ export interface BookingDoc {
   acceptedAt?: number | null
   completedAt?: number | null
   acknowledgedAt?: number | null
+  /** Cleaner ids who have passed on this (still-unassigned) job. */
+  declinedBy?: string[] | null
   dateCreated: number
   lastUpdated: number
 }
