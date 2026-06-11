@@ -39,21 +39,18 @@ export async function listServices(): Promise<CatalogServiceOut[]> {
 
 /**
  * List add-ons/extras for a service. `addon_catalog` docs may or may not carry a
- * service link; when a link field is present we filter by it, otherwise we
- * return all available add-ons (graceful fallback per spec open item).
+ * service link. A doc with NO link is treated as a global add-on (applies to
+ * every service); a linked doc is included only when its link matches this
+ * service. So an all-unlinked catalog returns everything, an all-linked catalog
+ * returns only matches, and a mixed catalog returns globals + matches.
  */
 export async function listServiceExtras(serviceId: string): Promise<ServiceExtraOut[]> {
   const { items } = await generic.listDocs(ADDON_CATALOG, { limit: 200 })
-  const linked = items.filter((d) => {
-    const link = d.serviceId ?? d.serviceDefinitionId ?? d.service_id
-    return link === undefined || link === null ? null : link === serviceId
-  })
-  // If no doc carries a link field at all, `linked` is empty → fall back to all.
-  const anyLinked = items.some(
-    (d) => (d.serviceId ?? d.serviceDefinitionId ?? d.service_id) !== undefined,
-  )
-  const source = anyLinked ? linked : items
-  return source
+  return items
+    .filter((d) => {
+      const link = d.serviceId ?? d.serviceDefinitionId ?? d.service_id
+      return link == null || link === serviceId
+    })
     .filter((d) => bool(d.isAvailable ?? d.active, true))
     .map((d) =>
       ServiceExtraOut.parse({

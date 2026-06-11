@@ -2,6 +2,7 @@ import { badRequest } from '@/server/core/errors'
 import { generateRefreshToken, hashPassword } from '@/server/security/hash'
 import * as customerRepo from '@/server/repositories/customer-repo'
 import * as resetRepo from '@/server/repositories/password-reset-repo'
+import * as sessions from '@/server/services/auth-session-service'
 import { sendPasswordResetEmail } from '@/server/core/email/send'
 
 /**
@@ -22,10 +23,15 @@ export async function requestReset(email: string, buildResetUrl: (token: string)
   await sendPasswordResetEmail({ to: customer.email, resetUrl: buildResetUrl(token) })
 }
 
-/** Validate a token and set a new password. 400 on invalid/expired token. */
+/**
+ * Validate a token and set a new password. 400 on invalid/expired token.
+ * Revokes all existing sessions so any tokens an attacker already holds are
+ * invalidated — password reset is the account-recovery path.
+ */
 export async function confirmReset(token: string, newPassword: string): Promise<void> {
   const customerId = await resetRepo.consume(token)
   if (!customerId) throw badRequest('Invalid or expired reset token')
   const hash = await hashPassword(newPassword)
   await customerRepo.updatePassword(customerId, hash)
+  await sessions.revokeAllSessions(customerId)
 }
