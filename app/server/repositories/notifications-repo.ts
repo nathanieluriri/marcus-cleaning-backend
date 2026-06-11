@@ -62,3 +62,13 @@ export async function remove(id: string): Promise<boolean> {
   const result = await collection().deleteOne(idFilter(id))
   return result.deletedCount > 0
 }
+
+/** Mark every notification for a customer as read. Returns the modified count. */
+export async function markAllRead(customer_id: string): Promise<number> {
+  await ensureIndexes()
+  const result = await collection().updateMany(
+    { customer_id, read: { $ne: true } },
+    { $set: { read: true, lastUpdated: Math.floor(Date.now() / 1000) } },
+  )
+  return result.modifiedCount
+}

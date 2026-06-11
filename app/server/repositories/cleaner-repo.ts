@@ -48,3 +48,12 @@ export async function updateLastAuthAt(id: string, epochSeconds: number): Promis
 export function toCleanerOut(doc: unknown): CleanerOutType {
   return CleanerOut.parse(fromDoc(doc))
 }
+
+/** All ACTIVE, APPROVED cleaners (directory source). Raw docs for downstream enrichment. */
+export async function listApproved(): Promise<WithId<CleanerDoc>[]> {
+  await ensureIndexes()
+  return collection()
+    .find({ onboardingStatus: 'APPROVED', accountStatus: 'ACTIVE' })
+    .sort({ dateCreated: -1 })
+    .toArray()
+}
