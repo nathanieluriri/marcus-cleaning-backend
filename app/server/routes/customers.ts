@@ -6,6 +6,8 @@ import { RefreshRequest, TokenResponse, readRefreshToken } from '@/server/schema
 import { z } from '@hono/zod-openapi'
 import * as customerService from '@/server/services/customer-service'
 import type { AppContext } from '@/server/core/http-env'
+import { PasswordResetRequest, PasswordResetConfirm } from '@/server/schemas/password-reset'
+import * as passwordResetService from '@/server/services/password-reset-service'
 
 /**
  * /v1/customers — auth slice (signup / login / refresh).
@@ -108,3 +110,43 @@ customers.openapi(refreshRoute, async (c) => {
     200,
   )
 })
+
+// POST /password-reset/request — always 200 (no email enumeration)
+customers.openapi(
+  createRoute({
+    method: 'post',
+    path: '/password-reset/request',
+    tags: ['Customers'],
+    request: { body: { content: { 'application/json': { schema: PasswordResetRequest } } } },
+    responses: {
+      200: { description: 'Reset requested', content: { 'application/json': { schema: envelopeOf(z.null()) } } },
+      ...commonErrors,
+    },
+  }),
+  async (c) => {
+    const { email } = c.req.valid('json')
+    const origin = new URL(c.req.url).origin
+    await passwordResetService.requestReset(email, (token) => `${origin}/reset-password?token=${token}`)
+    return c.json(ok(c, 'If that email exists, a reset link has been sent', null), 200)
+  },
+)
+
+// POST /password-reset/confirm
+customers.openapi(
+  createRoute({
+    method: 'post',
+    path: '/password-reset/confirm',
+    tags: ['Customers'],
+    request: { body: { content: { 'application/json': { schema: PasswordResetConfirm } } } },
+    responses: {
+      200: { description: 'Password reset', content: { 'application/json': { schema: envelopeOf(z.null()) } } },
+      400: { description: 'Invalid or expired token', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...commonErrors,
+    },
+  }),
+  async (c) => {
+    const { token, newPassword } = c.req.valid('json')
+    await passwordResetService.confirmReset(token, newPassword)
+    return c.json(ok(c, 'Password reset successfully', null), 200)
+  },
+)
