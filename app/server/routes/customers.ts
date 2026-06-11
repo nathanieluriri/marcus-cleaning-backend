@@ -84,6 +84,53 @@ customers.openapi(loginRoute, async (c) => {
   )
 })
 
+// Hybrid path aliases for the apps' guessed contract (spec §5.3).
+const signupAliasRoute = createRoute({
+  method: 'post',
+  path: '/sign-up',
+  tags: ['Customers'],
+  request: { body: { content: { 'application/json': { schema: CustomerSignupRequest } } } },
+  responses: {
+    201: { description: 'Account created', content: { 'application/json': { schema: envelopeOf(AuthResultData) } } },
+    409: { description: 'Email already exists', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+customers.openapi(signupAliasRoute, async (c) => {
+  const payload = c.req.valid('json')
+  const r = await customerService.signup(payload, deviceFrom(c))
+  return c.json(
+    ok(c, 'Account created successfully', {
+      customer: r.customer,
+      tokens: { accessToken: r.accessToken, refreshToken: r.refreshToken, tokenType: 'Bearer' as const, expiresIn: r.expiresIn, language: r.language },
+    }),
+    201,
+  )
+})
+
+const loginAliasRoute = createRoute({
+  method: 'post',
+  path: '/sign-in',
+  tags: ['Customers'],
+  request: { body: { content: { 'application/json': { schema: CustomerLogin } } } },
+  responses: {
+    200: { description: 'Login successful', content: { 'application/json': { schema: envelopeOf(AuthResultData) } } },
+    401: { description: 'Invalid credentials', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+customers.openapi(loginAliasRoute, async (c) => {
+  const payload = c.req.valid('json')
+  const r = await customerService.login(payload, deviceFrom(c))
+  return c.json(
+    ok(c, 'Login successful', {
+      customer: r.customer,
+      tokens: { accessToken: r.accessToken, refreshToken: r.refreshToken, tokenType: 'Bearer' as const, expiresIn: r.expiresIn, language: r.language },
+    }),
+    200,
+  )
+})
+
 // POST /refresh
 const refreshRoute = createRoute({
   method: 'post',
