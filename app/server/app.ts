@@ -29,6 +29,7 @@ import { notifications } from './routes/notifications'
 import { banners } from './routes/banners'
 import { customerOauth, cleanerOauth } from './routes/oauth'
 import { cleanerJobs } from './routes/cleaner-jobs'
+import { cleanerProfile } from './routes/cleaner-profile'
 import { cron } from './routes/cron'
 
 /**
@@ -76,6 +77,7 @@ app.route('/api/v1/customers', customerOauth)
 app.route('/api/v1/cleaners', cleaners)
 app.route('/api/v1/cleaners', cleanerOauth)
 app.route('/api/v1/cleaner', cleanerJobs)
+app.route('/api/v1/cleaner', cleanerProfile)
 app.route('/api/v1/admins', admins)
 app.route('/api/v1/admins', adminCore)
 app.route('/api/v1/admins', adminFeatures)
