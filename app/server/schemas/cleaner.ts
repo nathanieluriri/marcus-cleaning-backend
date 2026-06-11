@@ -78,6 +78,8 @@ export interface CleanerDoc {
   skills?: string[] | null
   equipment?: string[] | null
   serviceAreaIds?: string[] | null
+  serviceRadiusMiles?: number | null
+  availableDays?: string[] | null
   authProvider?: string | null
   authSubject?: string | null
   lastAuthAt?: number | null

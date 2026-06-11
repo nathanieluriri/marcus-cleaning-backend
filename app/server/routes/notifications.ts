@@ -29,6 +29,8 @@ const errs = {
 
 notifications.use('/', requireCustomer())
 notifications.use('/{id}', requireCustomer())
+notifications.use('/read-all', requireCustomer())
+notifications.use('/{id}/read', requireCustomer())
 
 // GET /
 notifications.openapi(
@@ -45,6 +47,48 @@ notifications.openapi(
   async (c) => {
     const items = await notificationsService.listNotifications({ principal: principalOf(c) })
     return c.json(ok(c, 'Notifications fetched successfully', items), 200)
+  },
+)
+
+// POST /read-all
+notifications.openapi(
+  createRoute({
+    method: 'post',
+    path: '/read-all',
+    tags: ['Notifications'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'All marked read', content: { 'application/json': { schema: envelopeOf(z.object({ updated: z.number().int() })) } } },
+      401: errs[401],
+    },
+  }),
+  async (c) => {
+    const result = await notificationsService.markAllRead({ principal: principalOf(c) })
+    return c.json(ok(c, 'All notifications marked as read', result), 200)
+  },
+)
+
+// POST /{id}/read — hybrid alias for the app's POST mark-read (PATCH /{id} still works)
+notifications.openapi(
+  createRoute({
+    method: 'post',
+    path: '/{id}/read',
+    tags: ['Notifications'],
+    security: [{ bearerAuth: [] }],
+    request: { params: IdParam },
+    responses: {
+      200: { description: 'Notification marked read', content: { 'application/json': { schema: envelopeOf(NotificationOut) } } },
+      ...errs,
+    },
+  }),
+  async (c) => {
+    const { id } = c.req.valid('param')
+    const notification = await notificationsService.updateNotification({
+      principal: principalOf(c),
+      id,
+      payload: { read: true },
+    })
+    return c.json(ok(c, 'Notification marked as read', notification), 200)
   },
 )
 

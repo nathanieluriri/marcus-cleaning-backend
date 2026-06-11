@@ -7,6 +7,7 @@ import type {
   ReviewUpdateRequest,
   ReviewOut,
 } from '@/server/schemas/review'
+import { timePeriodToSince } from '@/server/schemas/cleaner-directory'
 
 /**
  * Review CRUD business logic.
@@ -18,9 +19,21 @@ function nowEpoch(): number {
   return Math.floor(Date.now() / 1000)
 }
 
-/** List reviews, optionally filtered by cleaner. Open-ish read. */
-export async function listReviews(filter: { cleaner_id?: string } = {}): Promise<ReviewOut[]> {
-  return reviewRepo.list(filter)
+/** List reviews with optional cleaner / stars / time-period filters (hybrid). */
+export async function listReviews(filter: {
+  cleaner_id?: string
+  stars?: number
+  timePeriod?: 'all' | 'last30Days' | 'last90Days' | 'lastYear'
+  pageSize?: number
+} = {}): Promise<ReviewOut[]> {
+  let items = await reviewRepo.list({ cleaner_id: filter.cleaner_id })
+  if (filter.stars) items = items.filter((r) => r.rating === filter.stars)
+  if (filter.timePeriod && filter.timePeriod !== 'all') {
+    const since = timePeriodToSince(filter.timePeriod, Math.floor(Date.now() / 1000))
+    if (since !== undefined) items = items.filter((r) => (r.dateCreated ?? 0) >= since)
+  }
+  if (filter.pageSize) items = items.slice(0, filter.pageSize)
+  return items
 }
 
 /** Get a single review by id. Open-ish read. */

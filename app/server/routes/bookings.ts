@@ -17,6 +17,7 @@ import { applyTransition } from '@/server/services/booking-state-machine'
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import {
   BookingCustomerCreateRequest,
+  resolveAddons,
   BookingListQuery,
   normalizeBookingListQuery,
   BookingListOut,
@@ -100,6 +101,7 @@ function requireCustomerOrCleaner() {
 
 // --- guards (applied before the matching openapi() calls) ------------------
 bookings.use('/', requireCustomerOrCleaner()) // covers POST + GET on '/' — POST re-checked below
+bookings.use('/create', requireCustomerOrCleaner())
 bookings.use('/:booking_id', requireCustomerOrCleaner())
 bookings.use('/:booking_id/accept', requireCleaner())
 bookings.use('/:booking_id/complete', requireCleaner())
@@ -120,12 +122,12 @@ const createRouteDef = createRoute({
   },
 })
 
-bookings.openapi(createRouteDef, async (c) => {
+/** Shared create effect for `POST /` and its `POST /create` hybrid alias. */
+async function createBookingFrom(c: AppContext, payload: BookingCustomerCreateRequest) {
   const principal = principalOf(c)
   // The shared guard allows cleaners through; creation is customer-only.
   if (principal.role !== 'customer') throw new AppError(403, 'AUTH_ROLE_MISMATCH', 'Role not permitted', { required: 'customer', actual: principal.role })
 
-  const payload = c.req.valid('json')
   const ts = nowEpoch()
   const { price, currency } = computePrice(payload)
 
@@ -136,7 +138,7 @@ bookings.openapi(createRouteDef, async (c) => {
     place_id: payload.placeId,
     status: 'PENDING',
     schedule: payload.schedule,
-    addons: payload.addons,
+    addons: resolveAddons(payload),
     notes: payload.notes ?? null,
     price,
     currency,
@@ -151,7 +153,23 @@ bookings.openapi(createRouteDef, async (c) => {
   }
   const created = await bookingRepo.createBooking(doc)
   return c.json(ok(c, 'Booking created successfully', created), 201)
+}
+
+bookings.openapi(createRouteDef, async (c) => createBookingFrom(c, c.req.valid('json')))
+
+// POST /create — hybrid alias of POST / for the app's guessed path (same effect).
+const createAliasDef = createRoute({
+  method: 'post',
+  path: '/create',
+  tags: ['Bookings'],
+  security: [{ bearerAuth: [] }],
+  request: { body: { content: { 'application/json': { schema: BookingCustomerCreateRequest } } } },
+  responses: {
+    201: { description: 'Booking created', content: { 'application/json': { schema: envelopeOf(BookingOut) } } },
+    ...commonErrors,
+  },
 })
+bookings.openapi(createAliasDef, async (c) => createBookingFrom(c, c.req.valid('json')))
 
 // GET / — list (customer or cleaner; scoped to the principal) ---------------
 const listRouteDef = createRoute({

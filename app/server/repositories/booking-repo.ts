@@ -144,3 +144,34 @@ export async function updateBooking(
   await collection().updateOne(idFilter(id), { $set: set })
   return getBookingById(id)
 }
+
+/** Count bookings for a cleaner (optionally filtered by status). Derivation source for jobsDone. */
+export async function countForCleaner(cleaner_id: string, status?: BookingStatus): Promise<number> {
+  await ensureIndexes()
+  const query: Filter<BookingDoc> = { cleaner_id }
+  if (status) query.status = status
+  return collection().countDocuments(query)
+}
+
+/**
+ * Cleaner job feed: jobs assigned to this cleaner PLUS the unassigned PENDING
+ * pool, excluding jobs this cleaner has declined. Scheduled ascending.
+ */
+export async function getCleanerJobFeed(cleanerId: string): Promise<BookingOutType[]> {
+  await ensureIndexes()
+  const query: Filter<BookingDoc> & Record<string, unknown> = {
+    $or: [{ cleaner_id: cleanerId }, { cleaner_id: null, status: 'PENDING' }],
+    declinedBy: { $ne: cleanerId },
+  }
+  const rows = await collection().find(query).sort({ schedule: 1 }).toArray()
+  return rows.map(parse)
+}
+
+/** Record that a cleaner has passed on an (unassigned) job. */
+export async function addDecline(bookingId: string, cleanerId: string): Promise<void> {
+  await ensureIndexes()
+  await collection().updateOne(idFilter(bookingId), {
+    $addToSet: { declinedBy: cleanerId },
+    $set: { lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}

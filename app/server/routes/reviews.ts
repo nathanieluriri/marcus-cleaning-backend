@@ -43,8 +43,8 @@ reviews.openapi(
     },
   }),
   async (c) => {
-    const { cleaner_id } = c.req.valid('query')
-    const items = await reviewService.listReviews({ cleaner_id })
+    const { cleaner_id, stars, timePeriod, pageSize } = c.req.valid('query')
+    const items = await reviewService.listReviews({ cleaner_id, stars, timePeriod, pageSize })
     return c.json(ok(c, 'Reviews fetched successfully', items), 200)
   },
 )

@@ -17,14 +17,19 @@ import { cleaners } from './routes/cleaners'
 import { admins } from './routes/admins'
 import { adminFeatures } from './routes/admin-features'
 import { adminCore } from './routes/admin-core'
+import { bookingDiscovery } from './routes/booking-discovery'
 import { bookings } from './routes/bookings'
 import { payments } from './routes/payments'
 import { places } from './routes/places'
 import { documents } from './routes/documents'
 import { reviews } from './routes/reviews'
+import { catalog } from './routes/catalog'
+import { home } from './routes/home'
 import { notifications } from './routes/notifications'
 import { banners } from './routes/banners'
 import { customerOauth, cleanerOauth } from './routes/oauth'
+import { cleanerJobs } from './routes/cleaner-jobs'
+import { cleanerProfile } from './routes/cleaner-profile'
 import { cron } from './routes/cron'
 
 /**
@@ -71,14 +76,19 @@ app.route('/api/v1/customers', customerExtras)
 app.route('/api/v1/customers', customerOauth)
 app.route('/api/v1/cleaners', cleaners)
 app.route('/api/v1/cleaners', cleanerOauth)
+app.route('/api/v1/cleaner', cleanerJobs)
+app.route('/api/v1/cleaner', cleanerProfile)
 app.route('/api/v1/admins', admins)
 app.route('/api/v1/admins', adminCore)
 app.route('/api/v1/admins', adminFeatures)
+app.route('/api/v1/bookings', bookingDiscovery)
 app.route('/api/v1/bookings', bookings)
 app.route('/api/v1/payments', payments)
 app.route('/api/v1/places', places)
 app.route('/api/v1/documents', documents)
 app.route('/api/v1/reviews', reviews)
+app.route('/api/v1/services', catalog)
+app.route('/api/v1/home', home)
 app.route('/api/v1/notifications', notifications)
 app.route('/api/v1/banners', banners)
 app.route('/api/cron', cron)

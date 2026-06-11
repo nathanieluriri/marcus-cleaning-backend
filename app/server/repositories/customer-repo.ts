@@ -46,3 +46,11 @@ export async function updateLastAuthAt(id: string, epochSeconds: number): Promis
 export function toCustomerOut(doc: unknown): CustomerOutType {
   return CustomerOut.parse(fromDoc(doc))
 }
+
+/** Set a new bcrypt password hash for a customer. */
+export async function updatePassword(id: string, passwordHash: string): Promise<void> {
+  await ensureIndexes()
+  await collection().updateOne(idFilter(id), {
+    $set: { password: passwordHash, lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}

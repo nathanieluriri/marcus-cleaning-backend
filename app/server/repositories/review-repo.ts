@@ -65,3 +65,49 @@ export async function findRawById(id: string): Promise<WithId<ReviewDoc> | null>
   await ensureIndexes()
   return collection().findOne(idFilter(id))
 }
+
+/** Average rating + count for a cleaner (derivation source for ratings). */
+export async function aggregateForCleaner(cleaner_id: string): Promise<{ average: number; count: number }> {
+  await ensureIndexes()
+  const rows = await collection()
+    .aggregate<{ average: number; count: number }>([
+      { $match: { cleaner_id } },
+      { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } },
+      { $project: { _id: 0, average: { $round: [{ $ifNull: ['$average', 0] }, 1] }, count: 1 } },
+    ])
+    .toArray()
+  return rows[0] ?? { average: 0, count: 0 }
+}
+
+export interface CleanerReviewPage {
+  items: ReviewOutType[]
+  nextCursor: string | null
+}
+
+/** Cursor-paginated reviews for a cleaner, newest first, with optional star + since filters. */
+export async function listForCleanerPaginated(args: {
+  cleaner_id: string
+  stars?: number
+  since?: number
+  cursor?: string
+  pageSize?: number
+}): Promise<CleanerReviewPage> {
+  await ensureIndexes()
+  const pageSize = args.pageSize && args.pageSize > 0 ? args.pageSize : 10
+  const query: Record<string, unknown> = { cleaner_id: args.cleaner_id }
+  if (args.stars) query.rating = args.stars
+  if (args.since !== undefined) query.dateCreated = { $gte: args.since }
+  if (args.cursor) {
+    const { toObjectId } = await import('./_helpers')
+    query._id = { $lt: toObjectId(args.cursor) }
+  }
+  const rows = await collection()
+    .find(query)
+    .sort({ _id: -1 })
+    .limit(pageSize + 1)
+    .toArray()
+  const hasMore = rows.length > pageSize
+  const page = hasMore ? rows.slice(0, pageSize) : rows
+  const nextCursor = hasMore ? String(page[page.length - 1]?._id) : null
+  return { items: page.map(toOut), nextCursor }
+}

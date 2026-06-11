@@ -25,10 +25,13 @@ export const ReviewUpdateRequest = z
   .openapi('ReviewUpdateRequest')
 export type ReviewUpdateRequest = z.infer<typeof ReviewUpdateRequest>
 
-/** Optional `cleaner_id` filter for the list endpoint. */
+/** List filter: by cleaner, star rating, and time period (hybrid extension). */
 export const ReviewListQuery = z
   .object({
     cleaner_id: z.string().optional().openapi({ example: '665f1b2c9a1e4b0012abcd34' }),
+    stars: z.coerce.number().int().min(1).max(5).optional(),
+    timePeriod: z.enum(['all', 'last30Days', 'last90Days', 'lastYear']).default('all'),
+    pageSize: z.coerce.number().int().min(1).max(100).optional(),
   })
   .openapi('ReviewListQuery')
 export type ReviewListQuery = z.infer<typeof ReviewListQuery>

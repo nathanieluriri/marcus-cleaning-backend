@@ -6,6 +6,9 @@ import { RefreshRequest, TokenResponse, readRefreshToken } from '@/server/schema
 import { z } from '@hono/zod-openapi'
 import * as customerService from '@/server/services/customer-service'
 import type { AppContext } from '@/server/core/http-env'
+import { PasswordResetRequest, PasswordResetConfirm } from '@/server/schemas/password-reset'
+import * as passwordResetService from '@/server/services/password-reset-service'
+import { getSettings } from '@/server/core/settings'
 
 /**
  * /v1/customers — auth slice (signup / login / refresh).
@@ -81,6 +84,53 @@ customers.openapi(loginRoute, async (c) => {
   )
 })
 
+// Hybrid path aliases for the apps' guessed contract (spec §5.3).
+const signupAliasRoute = createRoute({
+  method: 'post',
+  path: '/sign-up',
+  tags: ['Customers'],
+  request: { body: { content: { 'application/json': { schema: CustomerSignupRequest } } } },
+  responses: {
+    201: { description: 'Account created', content: { 'application/json': { schema: envelopeOf(AuthResultData) } } },
+    409: { description: 'Email already exists', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+customers.openapi(signupAliasRoute, async (c) => {
+  const payload = c.req.valid('json')
+  const r = await customerService.signup(payload, deviceFrom(c))
+  return c.json(
+    ok(c, 'Account created successfully', {
+      customer: r.customer,
+      tokens: { accessToken: r.accessToken, refreshToken: r.refreshToken, tokenType: 'Bearer' as const, expiresIn: r.expiresIn, language: r.language },
+    }),
+    201,
+  )
+})
+
+const loginAliasRoute = createRoute({
+  method: 'post',
+  path: '/sign-in',
+  tags: ['Customers'],
+  request: { body: { content: { 'application/json': { schema: CustomerLogin } } } },
+  responses: {
+    200: { description: 'Login successful', content: { 'application/json': { schema: envelopeOf(AuthResultData) } } },
+    401: { description: 'Invalid credentials', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+customers.openapi(loginAliasRoute, async (c) => {
+  const payload = c.req.valid('json')
+  const r = await customerService.login(payload, deviceFrom(c))
+  return c.json(
+    ok(c, 'Login successful', {
+      customer: r.customer,
+      tokens: { accessToken: r.accessToken, refreshToken: r.refreshToken, tokenType: 'Bearer' as const, expiresIn: r.expiresIn, language: r.language },
+    }),
+    200,
+  )
+})
+
 // POST /refresh
 const refreshRoute = createRoute({
   method: 'post',
@@ -108,3 +158,44 @@ customers.openapi(refreshRoute, async (c) => {
     200,
   )
 })
+
+// POST /password-reset/request — always 200 (no email enumeration)
+customers.openapi(
+  createRoute({
+    method: 'post',
+    path: '/password-reset/request',
+    tags: ['Customers'],
+    request: { body: { content: { 'application/json': { schema: PasswordResetRequest } } } },
+    responses: {
+      200: { description: 'Reset requested', content: { 'application/json': { schema: envelopeOf(z.null()) } } },
+      ...commonErrors,
+    },
+  }),
+  async (c) => {
+    const { email } = c.req.valid('json')
+    // Trusted, server-configured base URL — never the request Host (prevents reset-link poisoning).
+    const base = getSettings().PUBLIC_APP_URL.replace(/\/$/, '')
+    await passwordResetService.requestReset(email, (token) => `${base}/reset-password?token=${token}`)
+    return c.json(ok(c, 'If that email exists, a reset link has been sent', null), 200)
+  },
+)
+
+// POST /password-reset/confirm
+customers.openapi(
+  createRoute({
+    method: 'post',
+    path: '/password-reset/confirm',
+    tags: ['Customers'],
+    request: { body: { content: { 'application/json': { schema: PasswordResetConfirm } } } },
+    responses: {
+      200: { description: 'Password reset', content: { 'application/json': { schema: envelopeOf(z.null()) } } },
+      400: { description: 'Invalid or expired token', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...commonErrors,
+    },
+  }),
+  async (c) => {
+    const { token, newPassword } = c.req.valid('json')
+    await passwordResetService.confirmReset(token, newPassword)
+    return c.json(ok(c, 'Password reset successfully', null), 200)
+  },
+)
