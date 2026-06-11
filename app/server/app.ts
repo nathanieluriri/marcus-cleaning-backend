@@ -22,6 +22,7 @@ import { payments } from './routes/payments'
 import { places } from './routes/places'
 import { documents } from './routes/documents'
 import { reviews } from './routes/reviews'
+import { catalog } from './routes/catalog'
 import { notifications } from './routes/notifications'
 import { banners } from './routes/banners'
 import { customerOauth, cleanerOauth } from './routes/oauth'
@@ -79,6 +80,7 @@ app.route('/api/v1/payments', payments)
 app.route('/api/v1/places', places)
 app.route('/api/v1/documents', documents)
 app.route('/api/v1/reviews', reviews)
+app.route('/api/v1/services', catalog)
 app.route('/api/v1/notifications', notifications)
 app.route('/api/v1/banners', banners)
 app.route('/api/cron', cron)
