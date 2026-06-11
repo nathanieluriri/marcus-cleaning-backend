@@ -80,3 +80,9 @@ export async function deleteNotification(args: {
   const deleted = await notificationsRepo.remove(args.id)
   if (!deleted) throw notFound('Notification not found')
 }
+
+/** Mark all of the calling customer's notifications as read. Returns the count updated. */
+export async function markAllRead(args: { principal: AuthPrincipal }): Promise<{ updated: number }> {
+  const updated = await notificationsRepo.markAllRead(args.principal.userId)
+  return { updated }
+}
