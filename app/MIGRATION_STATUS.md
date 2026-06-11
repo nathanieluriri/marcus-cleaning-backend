@@ -64,8 +64,18 @@ These compile and return well-shaped responses but need real logic / parity wiri
   booking-service delegation pending.
 - **Saved-address place resolution**: stores `place_id`; detail resolution via
   place-service not yet wired.
-- **Customer `/home` and `/bookings/*` contract aliases**, `/profile/payment-methods`
-  aliases: TODO (cross-domain).
+- **Mobile-facing surface**: IMPLEMENTED — customer `/home`, public
+  `/bookings/cleaners*` + `/bookings/services/{id}/extras` + `/services`, cleaner
+  `/cleaner/jobs*` + `/cleaner/profile`, password-reset (`request`/`confirm`),
+  notifications `read-all` + `POST /{id}/read`, and the `/sign-in`/`/sign-up`/
+  `/bookings/create` + `extras`→`addons` hybrid aliases. Plan:
+  `docs/superpowers/plans/2026-06-11-mobile-backend-endpoints.md`. Enrichment fields
+  (`hourlyRate`, `certifications`, `yearsExperience`, `avatarUrl`, `distanceMiles`,
+  `availableDays`) and booking `price` remain stubbed (null/empty) pending a
+  cleaner-model extension + pricing-service. Cleaner-decline is "pass; booking stays
+  in the pool" (records `declinedBy`, status unchanged). Reset links use the
+  server-trusted `PUBLIC_APP_URL` env (default Vercel URL) — never the request Host.
+- **`/profile/payment-methods` aliases**: still TODO (cross-domain).
 - **`account-lifecycle` cron**: stub (`processed: 0`).
 - **Field-shape parity**: schemas were rebuilt from the migration docs (the Python
   source was removed from the repo); exact field parity must be re-verified against
@@ -81,6 +91,8 @@ run the doc-13 parity tests before cutover.
 
 - Set real env (doc 11): `MONGODB_URI`, `DB_NAME`, `JWT_SECRET` (≥32 chars), `UPSTASH_*`,
   `RESEND_API_KEY` + verified domain, payment + storage vars, `GOOGLE_*`, `CRON_SECRET`.
+  Set `PUBLIC_APP_URL` to the real app/reset-page origin (used for password-reset links;
+  defaults to the Vercel URL) — it must be a trusted value, never the request Host.
 - Resolve open questions in doc 15 (admin credential source, URL-prefix strategy,
   Vercel plan for cron frequency, Resend sender branding, `/notificationss` spelling).
 - Add golden-response + OpenAPI-snapshot parity tests (doc 13).
