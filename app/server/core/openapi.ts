@@ -7,9 +7,12 @@ import type { Env } from './http-env'
  *  - Spec:      GET /api/doc
  *  - Reference: GET /api/reference
  *
- * Note: @hono/zod-openapi does not fold a Hono basePath into emitted paths, so
- * we declare `servers: [{ url: '/api' }]` and write route paths relative to the
- * router mount. See: ../../../docs/migration/05-api-docs-scalar.md
+ * Note: @hono/zod-openapi emits each operation's path as `mountPrefix + routePath`.
+ * The routers here are mounted under real `/api/...` prefixes (e.g.
+ * `app.route('/api', health)`), so emitted paths already include `/api`. The
+ * server URL must therefore be the origin root `/`, not `/api` — otherwise
+ * Scalar concatenates them into `/api/api/...`.
+ * See: ../../../docs/migration/05-api-docs-scalar.md
  */
 
 export function mountDocs(app: OpenAPIHono<Env>): void {
@@ -26,7 +29,7 @@ export function mountDocs(app: OpenAPIHono<Env>): void {
       version: '1.0.0',
       description: 'Serverless backend for the Marcus Cleaning platform.',
     },
-    servers: [{ url: '/api', description: 'Current deployment' }],
+    servers: [{ url: '/', description: 'Current deployment' }],
   })
 
   app.get(
