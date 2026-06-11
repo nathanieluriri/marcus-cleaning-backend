@@ -17,6 +17,7 @@ import { cleaners } from './routes/cleaners'
 import { admins } from './routes/admins'
 import { adminFeatures } from './routes/admin-features'
 import { adminCore } from './routes/admin-core'
+import { bookingDiscovery } from './routes/booking-discovery'
 import { bookings } from './routes/bookings'
 import { payments } from './routes/payments'
 import { places } from './routes/places'
@@ -75,6 +76,7 @@ app.route('/api/v1/cleaners', cleanerOauth)
 app.route('/api/v1/admins', admins)
 app.route('/api/v1/admins', adminCore)
 app.route('/api/v1/admins', adminFeatures)
+app.route('/api/v1/bookings', bookingDiscovery)
 app.route('/api/v1/bookings', bookings)
 app.route('/api/v1/payments', payments)
 app.route('/api/v1/places', places)
