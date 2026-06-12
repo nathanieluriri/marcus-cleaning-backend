@@ -75,8 +75,9 @@ const guardMutations = createMiddleware<Env>(async (c, next) => {
   if (c.req.method === 'GET') return next()
   return customerGuard(c, next)
 })
-reviews.use('/', guardMutations)
-reviews.use('/{id}', guardMutations)
+// Wildcard so the guard fires on the dynamic `:id` route too (`/{id}` is a
+// literal to Hono and would never match). guardMutations lets GET through.
+reviews.use('*', guardMutations)
 
 // POST /
 reviews.openapi(

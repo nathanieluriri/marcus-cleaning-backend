@@ -27,10 +27,10 @@ const errs = {
   422: { description: 'Validation error', content: { 'application/json': { schema: ErrorEnvelope } } },
 }
 
-notifications.use('/', requireCustomer())
-notifications.use('/{id}', requireCustomer())
-notifications.use('/read-all', requireCustomer())
-notifications.use('/{id}/read', requireCustomer())
+// Wildcard guard: `.use('/{id}', …)` never matches Hono's real `:id` route, so
+// guard every path under this router instead. All notification routes are
+// customer-scoped.
+notifications.use('*', requireCustomer())
 
 // GET /
 notifications.openapi(

@@ -43,6 +43,17 @@ export async function findById(customerId: string, addressId: string): Promise<S
   return doc ? toOut(doc) : null
 }
 
+/**
+ * Look up a customer's saved address by Google `placeId` (used to resolve a
+ * booking's `formattedAddress` for display enrichment). Returns null if the
+ * customer never saved that place.
+ */
+export async function findByPlaceId(customerId: string, placeId: string): Promise<SavedAddressOutType | null> {
+  await ensureIndexes()
+  const doc = await collection().findOne({ customerId, placeId })
+  return doc ? toOut(doc) : null
+}
+
 export async function insertAddress(doc: SavedAddressDoc): Promise<SavedAddressOutType> {
   await ensureIndexes()
   const result = await collection().insertOne(doc)

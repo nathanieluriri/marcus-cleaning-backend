@@ -1,13 +1,18 @@
+import { randomBytes } from 'node:crypto'
 import { notFound, forbidden, conflict, badRequest } from '@/server/core/errors'
 import * as paymentRepo from '@/server/repositories/payment-repo'
 import * as paymentMethodRepo from '@/server/repositories/payment-method-repo'
+import * as bookingRepo from '@/server/repositories/booking-repo'
+import * as pricing from './pricing-service'
 import { getPaymentProvider, getProviderByName } from '@/server/core/payments/manager'
 import type { WebhookEvent } from '@/server/core/payments/types'
 import type {
+  PaymentCreatedOut,
   PaymentMethodCreate,
   PaymentMethodOut,
   PaymentMethodUpdate,
   PaymentOut,
+  PaymentProviderName,
   PaymentStatus,
 } from '@/server/schemas/payment'
 
@@ -26,6 +31,85 @@ function nowEpoch(): number {
 const TERMINAL: ReadonlySet<PaymentStatus> = new Set(['succeeded', 'failed', 'refunded', 'cancelled'])
 
 // --- payments ---
+
+export interface CreatePaymentForBookingInput {
+  customerId: string
+  bookingId: string
+  paymentMethodId?: string | null
+  provider?: PaymentProviderName
+}
+
+/**
+ * Create a payment for a booking. The amount/currency are derived from the
+ * booking (stored price, else a fresh catalog quote) — never from the client.
+ * For the `test` provider the payment settles immediately (`succeeded`) so the
+ * mark-paid flow is testable without a real PSP; real providers open an intent
+ * and the payment finalizes via webhook. The returned `id` is the `paymentId`
+ * the app passes to `POST /bookings/{id}/payments/mark-paid`.
+ */
+export async function createPaymentForBooking(input: CreatePaymentForBookingInput): Promise<PaymentCreatedOut> {
+  const booking = await bookingRepo.getBookingById(input.bookingId)
+  if (!booking) throw notFound('Booking not found')
+  if (booking.customer_id !== input.customerId) throw forbidden('Booking does not belong to caller')
+  if (booking.payment_status === 'PAID') throw conflict('Booking is already paid')
+
+  // Amount is server-authoritative: prefer the stored booking price, else quote.
+  let amountMajor = booking.price
+  let currency = booking.currency
+  if (amountMajor == null) {
+    const quote = await pricing.quoteForBooking(booking)
+    amountMajor = quote.total
+    currency = quote.currency
+  }
+  const amountMinor = pricing.toMinorUnits(amountMajor ?? 0)
+  const cur = (currency ?? 'USD').toUpperCase().slice(0, 3)
+
+  // Validate an optional saved method belongs to the caller.
+  const paymentMethodId = input.paymentMethodId ?? null
+  if (paymentMethodId) {
+    const method = await paymentMethodRepo.getById(paymentMethodId)
+    if (!method || method.customerId !== input.customerId) throw notFound('Payment method not found')
+  }
+
+  const providerName: PaymentProviderName = input.provider ?? 'test'
+  const reference = `pay_${randomBytes(12).toString('hex')}`
+  const ts = nowEpoch()
+
+  let status: PaymentStatus = 'pending'
+  let providerReference: string | null = null
+  let checkoutUrl: string | null = null
+  let clientSecret: string | null = null
+
+  if (providerName === 'test') {
+    // Test provider settles immediately so the end-to-end flow is testable.
+    status = 'succeeded'
+    providerReference = reference
+  } else {
+    const provider = getProviderByName(providerName)
+    const intent = await provider.createIntent({ reference, amountMinor, currency: cur, customerId: input.customerId })
+    status = intent.status
+    providerReference = intent.providerReference
+    checkoutUrl = intent.checkoutUrl
+    clientSecret = intent.clientSecret
+  }
+
+  const created = await paymentRepo.create({
+    reference,
+    provider: providerName,
+    providerReference,
+    providerEventId: null,
+    status,
+    amountMinor,
+    currency: cur,
+    customerId: input.customerId,
+    bookingId: input.bookingId,
+    paymentMethodId,
+    dateCreated: ts,
+    lastUpdated: ts,
+  })
+
+  return { ...created, checkoutUrl, clientSecret }
+}
 
 export async function getById(id: string): Promise<PaymentOut> {
   const row = await paymentRepo.getById(id)

@@ -14,6 +14,8 @@ import {
   loadCleanerBooking,
 } from '@/server/security/booking-access'
 import { applyTransition } from '@/server/services/booking-state-machine'
+import { enrichBooking, enrichBookings } from '@/server/services/booking-enrichment'
+import { computeQuote } from '@/server/services/pricing-service'
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import {
   BookingCustomerCreateRequest,
@@ -22,6 +24,8 @@ import {
   normalizeBookingListQuery,
   BookingListOut,
   BookingMarkPaidRequest,
+  BookingQuoteRequest,
+  BookingQuoteOut,
   BookingRatingRequest,
   BookingOut,
   type BookingDoc,
@@ -102,6 +106,7 @@ function requireCustomerOrCleaner() {
 // --- guards (applied before the matching openapi() calls) ------------------
 bookings.use('/', requireCustomerOrCleaner()) // covers POST + GET on '/' — POST re-checked below
 bookings.use('/create', requireCustomerOrCleaner())
+bookings.use('/quote', requireCustomer())
 bookings.use('/:booking_id', requireCustomerOrCleaner())
 bookings.use('/:booking_id/accept', requireCleaner())
 bookings.use('/:booking_id/complete', requireCleaner())
@@ -152,7 +157,7 @@ async function createBookingFrom(c: AppContext, payload: BookingCustomerCreateRe
     lastUpdated: ts,
   }
   const created = await bookingRepo.createBooking(doc)
-  return c.json(ok(c, 'Booking created successfully', created), 201)
+  return c.json(ok(c, 'Booking created successfully', await enrichBooking(created)), 201)
 }
 
 bookings.openapi(createRouteDef, async (c) => createBookingFrom(c, c.req.valid('json')))
@@ -170,6 +175,27 @@ const createAliasDef = createRoute({
   },
 })
 bookings.openapi(createAliasDef, async (c) => createBookingFrom(c, c.req.valid('json')))
+
+// POST /quote — backend-authoritative price quote (customer) -----------------
+const quoteRouteDef = createRoute({
+  method: 'post',
+  path: '/quote',
+  tags: ['Bookings'],
+  security: [{ bearerAuth: [] }],
+  request: { body: { content: { 'application/json': { schema: BookingQuoteRequest } } } },
+  responses: {
+    200: { description: 'Price quote', content: { 'application/json': { schema: envelopeOf(BookingQuoteOut) } } },
+    ...commonErrors,
+  },
+})
+bookings.openapi(quoteRouteDef, async (c) => {
+  const payload = c.req.valid('json')
+  const quote = await computeQuote(
+    payload.serviceId,
+    payload.extras.map((addonId) => ({ addonId, quantity: 1 })),
+  )
+  return c.json(ok(c, 'Quote computed successfully', quote), 200)
+})
 
 // GET / — list (customer or cleaner; scoped to the principal) ---------------
 const listRouteDef = createRoute({
@@ -199,7 +225,8 @@ bookings.openapi(listRouteDef, async (c) => {
     pageSize: q.pageSize,
     now: nowEpoch(),
   })
-  return c.json(ok(c, 'Bookings retrieved successfully', result), 200)
+  const items = await enrichBookings(result.items)
+  return c.json(ok(c, 'Bookings retrieved successfully', { ...result, items }), 200)
 })
 
 // GET /{booking_id} — visibility-checked ------------------------------------
@@ -221,7 +248,7 @@ bookings.openapi(getRouteDef, async (c) => {
   const principal = principalOf(c)
   const { booking_id } = c.req.valid('param')
   const booking = await loadViewableBooking(principal, booking_id)
-  return c.json(ok(c, 'Booking retrieved successfully', booking), 200)
+  return c.json(ok(c, 'Booking retrieved successfully', await enrichBooking(booking)), 200)
 })
 
 // POST /{booking_id}/accept — cleaner ---------------------------------------

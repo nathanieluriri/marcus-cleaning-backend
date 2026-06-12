@@ -116,6 +116,31 @@ export const PaymentMethodUpdate = z
   .openapi('PaymentMethodUpdate')
 export type PaymentMethodUpdate = z.infer<typeof PaymentMethodUpdate>
 
+/**
+ * Create a payment for a booking. The amount/currency are computed server-side
+ * from the booking — the client never sends an amount. `provider` defaults to
+ * `test` (settles immediately so the flow is end-to-end testable).
+ */
+export const PaymentCreateRequest = z
+  .object({
+    bookingId: z.string().min(1).openapi({ example: '665f1b2c9a1e4b0012booking' }),
+    paymentMethodId: z.string().nullable().optional(),
+    provider: PaymentProviderName.optional(),
+  })
+  .openapi('PaymentCreateRequest')
+export type PaymentCreateRequest = z.infer<typeof PaymentCreateRequest>
+
+/**
+ * Create-payment response: the PaymentOut plus any client-confirm material for
+ * real providers (Stripe client secret / hosted checkout URL). Both null for
+ * the test provider, which settles immediately.
+ */
+export const PaymentCreatedOut = PaymentOut.extend({
+  checkoutUrl: z.string().nullable().default(null),
+  clientSecret: z.string().nullable().default(null),
+}).openapi('PaymentCreatedOut')
+export type PaymentCreatedOut = z.infer<typeof PaymentCreatedOut>
+
 export const RefundRequest = z
   .object({
     /** Partial refund amount in minor units; omit for full refund. */

@@ -33,8 +33,11 @@ const guardByMethod = createMiddleware<Env>(async (c, next) => {
   if (c.req.method === 'GET') return customerGuard(c, next)
   return adminGuard(c, next)
 })
-banners.use('/', guardByMethod)
-banners.use('/{id}', guardByMethod)
+// Wildcard so the guard fires on dynamic `:id` routes too. Hono treats `/{id}`
+// as a literal segment (params use `:id`), so `.use('/{id}', …)` would never
+// match — leaving mutations unguarded. `*` covers `/` and every sub-path; the
+// by-method dispatch keeps GET on the customer guard and writes on admin.
+banners.use('*', guardByMethod)
 
 // GET / — list (authenticated)
 banners.openapi(

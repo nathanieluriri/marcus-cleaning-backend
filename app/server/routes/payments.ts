@@ -6,6 +6,8 @@ import { requireCustomer, principalOf } from '@/server/security/guards'
 import { getProviderByName } from '@/server/core/payments/manager'
 import * as paymentService from '@/server/services/payment-service'
 import {
+  PaymentCreatedOut,
+  PaymentCreateRequest,
   PaymentMethodCreate,
   PaymentMethodList,
   PaymentMethodOut,
@@ -47,6 +49,36 @@ payments.post('/webhooks/:provider', async (c) => {
   await paymentService.applyWebhookEvent(event)
   return c.text('OK', 200)
 })
+
+// --- POST / — create a payment for a booking (customer-guarded) ---
+// Registered before the `/:payment_id` guards below; `/` matches the root only.
+payments.use('/', requireCustomer())
+payments.openapi(
+  createRoute({
+    method: 'post',
+    path: '/',
+    tags: ['Payments'],
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: PaymentCreateRequest } } } },
+    responses: {
+      201: { description: 'Payment created', content: { 'application/json': { schema: envelopeOf(PaymentCreatedOut) } } },
+      409: { description: 'Booking already paid', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...authErr,
+      ...notFoundErr,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const body = c.req.valid('json')
+    const created = await paymentService.createPaymentForBooking({
+      customerId: p.userId,
+      bookingId: body.bookingId,
+      paymentMethodId: body.paymentMethodId ?? null,
+      provider: body.provider,
+    })
+    return c.json(ok(c, 'Payment created successfully', created), 201)
+  },
+)
 
 // --- payment methods (customer-guarded) ---
 

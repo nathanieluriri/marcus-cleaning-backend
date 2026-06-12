@@ -73,6 +73,30 @@ export const BookingMarkPaidRequest = z
   .openapi('BookingMarkPaidRequest')
 export type BookingMarkPaidRequest = z.infer<typeof BookingMarkPaidRequest>
 
+/** Price-quote request (POST /bookings/quote). Backend-authoritative pricing. */
+export const BookingQuoteRequest = z
+  .object({
+    serviceId: z.string().openapi({ example: '665f1b2c9a1e4b0012service' }),
+    extras: z.array(z.string()).default([]).openapi({ description: 'Flat list of add-on ids (quantity 1 each).' }),
+    schedule: z.number().int().optional().openapi({ example: 1750000000 }),
+    placeId: z.string().optional(),
+    cleanerId: z.string().nullable().optional(),
+  })
+  .openapi('BookingQuoteRequest')
+export type BookingQuoteRequest = z.infer<typeof BookingQuoteRequest>
+
+/** Price-quote response. Mirrors pricing-service Quote. */
+export const BookingQuoteOut = z
+  .object({
+    base: z.number().openapi({ example: 45 }),
+    addons: z.number().openapi({ example: 20 }),
+    fees: z.number().openapi({ example: 0 }),
+    total: z.number().openapi({ example: 65 }),
+    currency: z.string().openapi({ example: 'USD' }),
+  })
+  .openapi('BookingQuoteOut')
+export type BookingQuoteOut = z.infer<typeof BookingQuoteOut>
+
 /** Customer rating request. */
 export const BookingRatingRequest = z
   .object({
@@ -170,6 +194,13 @@ export const BookingOut = z
     acknowledgedAt: z.number().int().nullable().default(null),
     dateCreated: z.number().int().nullable().default(null),
     lastUpdated: z.number().int().nullable().default(null),
+    // Display enrichment — resolved from serviceId / cleaner_id / place_id by
+    // booking-enrichment.ts. Null when unresolved. Additive; existing mappers
+    // ignore them. See docs/migration backend task #2.
+    serviceTitle: z.string().nullable().default(null),
+    cleanerName: z.string().nullable().default(null),
+    cleanerAvatarUrl: z.string().nullable().default(null),
+    formattedAddress: z.string().nullable().default(null),
   })
   .openapi('BookingOut')
 export type BookingOut = z.infer<typeof BookingOut>
