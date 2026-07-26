@@ -73,6 +73,21 @@ const EnvSchema = z
     UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
     ROLE_RATE_LIMITS: z.string().optional(),
 
+    // push notifications (Firebase Cloud Messaging HTTP v1; APNs via FCM)
+    FCM_PROJECT_ID: z.string().optional(),
+    FCM_CLIENT_EMAIL: z.string().optional(),
+    /** Service-account private key (PEM). Newlines may be escaped as \n. */
+    FCM_PRIVATE_KEY: z.string().optional(),
+
+    // payouts
+    PAYOUT_CASH_OUT_MIN: z.coerce.number().nonnegative().default(20),
+    PAYOUT_CASH_OUT_FEE: z.coerce.number().nonnegative().default(1.5),
+    /** Platform commission withheld from a completed job, as a percentage. */
+    PLATFORM_COMMISSION_PERCENT: z.coerce.number().min(0).max(100).default(20),
+
+    // documents
+    DOCUMENT_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+
     // cron
     CRON_SECRET: z.string().min(16).optional(),
 

@@ -29,12 +29,42 @@ function toOut(doc: unknown): NotificationOutType {
   return NotificationOut.parse(fromDoc(doc))
 }
 
-export async function list(filter: { customer_id?: string } = {}): Promise<NotificationOutType[]> {
-  await ensureIndexes()
+/**
+ * Build the recipient query. Rows written before `recipientRole` existed have
+ * no such field, so a customer query must also match documents missing it.
+ */
+function recipientQuery(filter: {
+  customer_id?: string
+  recipientRole?: 'customer' | 'cleaner'
+}): Record<string, unknown> {
   const query: Record<string, unknown> = {}
   if (filter.customer_id) query.customer_id = filter.customer_id
-  const rows = await collection().find(query).sort({ dateCreated: -1 }).toArray()
+  if (filter.recipientRole === 'cleaner') query.recipientRole = 'cleaner'
+  else if (filter.recipientRole === 'customer') {
+    query.$or = [{ recipientRole: 'customer' }, { recipientRole: { $exists: false } }]
+  }
+  return query
+}
+
+export async function list(
+  filter: { customer_id?: string; recipientRole?: 'customer' | 'cleaner' } = {},
+): Promise<NotificationOutType[]> {
+  await ensureIndexes()
+  const rows = await collection()
+    .find(recipientQuery(filter))
+    .sort({ dateCreated: -1 })
+    .toArray()
   return rows.map(toOut)
+}
+
+/** Unread count for the notification tab badge. */
+export async function countUnread(
+  customer_id: string,
+  recipientRole: 'customer' | 'cleaner' = 'customer',
+): Promise<number> {
+  await ensureIndexes()
+  const query = recipientQuery({ customer_id, recipientRole })
+  return collection().countDocuments({ ...query, read: { $ne: true } })
 }
 
 export async function getById(id: string): Promise<NotificationOutType | null> {
@@ -63,11 +93,15 @@ export async function remove(id: string): Promise<boolean> {
   return result.deletedCount > 0
 }
 
-/** Mark every notification for a customer as read. Returns the modified count. */
-export async function markAllRead(customer_id: string): Promise<number> {
+/** Mark every notification for a recipient as read. Returns the modified count. */
+export async function markAllRead(
+  customer_id: string,
+  recipientRole: 'customer' | 'cleaner' = 'customer',
+): Promise<number> {
   await ensureIndexes()
+  const query = recipientQuery({ customer_id, recipientRole })
   const result = await collection().updateMany(
-    { customer_id, read: { $ne: true } },
+    { ...query, read: { $ne: true } },
     { $set: { read: true, lastUpdated: Math.floor(Date.now() / 1000) } },
   )
   return result.modifiedCount

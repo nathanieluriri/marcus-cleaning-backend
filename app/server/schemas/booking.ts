@@ -73,6 +73,61 @@ export const BookingMarkPaidRequest = z
   .openapi('BookingMarkPaidRequest')
 export type BookingMarkPaidRequest = z.infer<typeof BookingMarkPaidRequest>
 
+/** Price-quote request (POST /bookings/quote). Backend-authoritative pricing. */
+export const BookingQuoteRequest = z
+  .object({
+    serviceId: z.string().openapi({ example: '665f1b2c9a1e4b0012service' }),
+    extras: z.array(z.string()).default([]).openapi({ description: 'Flat list of add-on ids (quantity 1 each).' }),
+    schedule: z.number().int().optional().openapi({ example: 1750000000 }),
+    placeId: z.string().optional(),
+    cleanerId: z.string().nullable().optional(),
+  })
+  .openapi('BookingQuoteRequest')
+export type BookingQuoteRequest = z.infer<typeof BookingQuoteRequest>
+
+/** Price-quote response. Mirrors pricing-service Quote. */
+export const BookingQuoteOut = z
+  .object({
+    base: z.number().openapi({ example: 45 }),
+    addons: z.number().openapi({ example: 20 }),
+    fees: z.number().openapi({ example: 0 }),
+    total: z.number().openapi({ example: 65 }),
+    currency: z.string().openapi({ example: 'USD' }),
+  })
+  .openapi('BookingQuoteOut')
+export type BookingQuoteOut = z.infer<typeof BookingQuoteOut>
+
+/** Customer cancellation request. The fee is computed server-side. */
+export const BookingCancelRequest = z
+  .object({
+    reason: z.string().max(500).nullable().optional().openapi({ example: 'Plans changed' }),
+  })
+  .openapi('BookingCancelRequest')
+export type BookingCancelRequest = z.infer<typeof BookingCancelRequest>
+
+/** Result of a cancellation: the updated booking plus the applied fee policy. */
+export const BookingCancellationOut = z
+  .object({
+    booking: z.lazy(() => BookingOut),
+    fee: z.number().openapi({ example: 12.5, description: 'Cancellation fee charged, in major units.' }),
+    feePercent: z.number().openapi({ example: 50 }),
+    refund: z.number().openapi({ example: 12.5, description: 'Amount refundable to the customer.' }),
+    currency: z.string().nullable().default(null),
+    policy: z.string().openapi({ example: 'LATE', description: 'Which policy band applied.' }),
+    hoursUntilStart: z.number().openapi({ example: 3.5 }),
+  })
+  .openapi('BookingCancellationOut')
+export type BookingCancellationOut = z.infer<typeof BookingCancellationOut>
+
+/** Customer reschedule request — a new scheduled start (unix epoch seconds). */
+export const BookingRescheduleRequest = z
+  .object({
+    schedule: z.number().int().openapi({ example: 1750000000 }),
+    reason: z.string().max(500).nullable().optional(),
+  })
+  .openapi('BookingRescheduleRequest')
+export type BookingRescheduleRequest = z.infer<typeof BookingRescheduleRequest>
+
 /** Customer rating request. */
 export const BookingRatingRequest = z
   .object({
@@ -168,8 +223,20 @@ export const BookingOut = z
     acceptedAt: z.number().int().nullable().default(null),
     completedAt: z.number().int().nullable().default(null),
     acknowledgedAt: z.number().int().nullable().default(null),
+    cancelledAt: z.number().int().nullable().default(null),
+    cancelledBy: z.enum(['customer', 'cleaner', 'admin']).nullable().default(null),
+    cancellationReason: z.string().nullable().default(null),
+    cancellationFee: z.number().nullable().default(null),
+    rescheduleCount: z.number().int().default(0),
     dateCreated: z.number().int().nullable().default(null),
     lastUpdated: z.number().int().nullable().default(null),
+    // Display enrichment — resolved from serviceId / cleaner_id / place_id by
+    // booking-enrichment.ts. Null when unresolved. Additive; existing mappers
+    // ignore them. See docs/migration backend task #2.
+    serviceTitle: z.string().nullable().default(null),
+    cleanerName: z.string().nullable().default(null),
+    cleanerAvatarUrl: z.string().nullable().default(null),
+    formattedAddress: z.string().nullable().default(null),
   })
   .openapi('BookingOut')
 export type BookingOut = z.infer<typeof BookingOut>
@@ -204,6 +271,11 @@ export interface BookingDoc {
   acceptedAt?: number | null
   completedAt?: number | null
   acknowledgedAt?: number | null
+  cancelledAt?: number | null
+  cancelledBy?: 'customer' | 'cleaner' | 'admin' | null
+  cancellationReason?: string | null
+  cancellationFee?: number | null
+  rescheduleCount?: number
   /** Cleaner ids who have passed on this (still-unassigned) job. */
   declinedBy?: string[] | null
   dateCreated: number

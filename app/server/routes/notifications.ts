@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
-import { requireCustomer, principalOf } from '@/server/security/guards'
+import { requireCustomerOrCleaner, principalOf } from '@/server/security/guards'
 import {
   NotificationCreateRequest,
   NotificationUpdateRequest,
@@ -27,10 +27,10 @@ const errs = {
   422: { description: 'Validation error', content: { 'application/json': { schema: ErrorEnvelope } } },
 }
 
-notifications.use('/', requireCustomer())
-notifications.use('/{id}', requireCustomer())
-notifications.use('/read-all', requireCustomer())
-notifications.use('/{id}/read', requireCustomer())
+// Wildcard guard: `.use('/{id}', …)` never matches Hono's real `:id` route, so
+// guard every path under this router instead. Both apps read their own feed;
+// rows are scoped by (recipient id, recipient role) in the service.
+notifications.use('*', requireCustomerOrCleaner())
 
 // GET /
 notifications.openapi(
@@ -47,6 +47,24 @@ notifications.openapi(
   async (c) => {
     const items = await notificationsService.listNotifications({ principal: principalOf(c) })
     return c.json(ok(c, 'Notifications fetched successfully', items), 200)
+  },
+)
+
+// GET /unread-count — drives the tab badge
+notifications.openapi(
+  createRoute({
+    method: 'get',
+    path: '/unread-count',
+    tags: ['Notifications'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Unread count', content: { 'application/json': { schema: envelopeOf(z.object({ unread: z.number().int() })) } } },
+      401: errs[401],
+    },
+  }),
+  async (c) => {
+    const result = await notificationsService.unreadCount({ principal: principalOf(c) })
+    return c.json(ok(c, 'Unread count fetched successfully', result), 200)
   },
 )
 

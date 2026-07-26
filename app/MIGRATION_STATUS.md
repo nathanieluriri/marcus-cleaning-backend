@@ -50,11 +50,21 @@ rotation + reuse detection (`sessions` collection + TTL); `revoke-others`/`revok
 revoke, password-reset); Vercel Cron routes (`reconcile-payments`, `account-lifecycle`,
 `expire-cleanup`) secured by `CRON_SECRET`; `vercel.json` cron schedule.
 
+**Mobile gap closure** (see `../backend-requirements/04-newly-implemented.md`) — booking
+cancel/reschedule with a server-owned fee policy; the cleaner job lifecycle (start / checklist /
+complete / SOS) with a server-owned timer; the cleaner application wizard + review state machine;
+earnings, balance, payouts and cash-out; weekly availability + dated overrides + calendar schedule;
+customer<->cleaner chat (polling transport, delivery/read receipts); FCM push + device registration
++ unread counts; promotions with server-side discount validation; FAQ and support tickets;
+`Idempotency-Key` support on booking creation, job completion and cash-out.
+
 ## Known stubs / TODOs (search for `TODO` in `server/`)
 
 These compile and return well-shaped responses but need real logic / parity wiring:
 
-- **Pricing**: booking price is a passthrough stub (no `pricing-service` yet).
+- **Cash-out settlement**: a cash-out creates a PENDING payout and reserves the balance; the
+  provider transfer itself is not wired to a live account yet.
+- **Geo matching**: `distanceMiles` / `isPriority` on cleaner jobs remain stubbed.
 - **Admin analytics**: monitoring overview/heatmap/denied-top/anomalies and
   signups-trend return shaped zeroed data; aggregations pending.
 - **Audit export**: on-demand record + JSON stub; wire S3/Blob signed-URL download.
