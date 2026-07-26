@@ -14,6 +14,10 @@ function collection(): Collection<CleanerDoc> {
 async function ensureIndexes(): Promise<void> {
   if (indexesReady) return
   await collection().createIndex({ email: 1 }, { name: 'idx_cleaner_email', unique: true })
+  await collection().createIndex(
+    { authProvider: 1, authSubject: 1 },
+    { name: 'idx_cleaner_auth_subject', sparse: true },
+  )
   await collection().createIndex({ onboardingStatus: 1 }, { name: 'idx_cleaner_onboarding_status' })
   indexesReady = true
 }
@@ -21,6 +25,21 @@ async function ensureIndexes(): Promise<void> {
 export async function findByEmail(email: string): Promise<WithId<CleanerDoc> | null> {
   await ensureIndexes()
   return collection().findOne({ email: email.toLowerCase() })
+}
+
+/**
+ * Look up an account by the identity-provider subject it was linked with.
+ *
+ * This is the SAFE key for social sign-in: the subject is issued by the
+ * provider and cannot be claimed by another user, whereas an email in an
+ * unverified token can be set to anything.
+ */
+export async function findByAuthSubject(
+  authProvider: string,
+  authSubject: string,
+): Promise<WithId<CleanerDoc> | null> {
+  await ensureIndexes()
+  return collection().findOne({ authProvider, authSubject })
 }
 
 export async function findById(id: string): Promise<WithId<CleanerDoc> | null> {

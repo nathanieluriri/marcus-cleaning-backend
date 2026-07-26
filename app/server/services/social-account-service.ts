@@ -15,9 +15,19 @@ import { verifyIdentityToken, type VerifiedIdentity } from './identity-token-ser
  *   - the browser redirect flow (google-oauth-service)
  *   - the native token exchange (POST /{role}/auth/social)
  *
- * Accounts are matched on email. A user who signed up with a password and later
- * taps "Continue with Google" lands on their existing account rather than a
- * duplicate — the alternative silently strands their booking history.
+ * ACCOUNT MATCHING IS SECURITY-CRITICAL. It runs in two steps:
+ *
+ *   1. Match on (authProvider, authSubject). The subject is minted by the
+ *      identity provider and cannot be claimed by anyone else, so this is
+ *      always safe.
+ *   2. Only if that misses, fall back to matching on email — and ONLY when the
+ *      issuer marked the email verified.
+ *
+ * Step 2's guard is the important one. Firebase will happily mint an ID token
+ * for an email/password account whose address was never confirmed, so matching
+ * an unverified email against an existing account would let anyone register
+ * victim@example.com in our Firebase project and be handed that user's account.
+ * Unverified identities are rejected outright in signInWithIdToken.
  */
 
 function nowEpoch(): number {
@@ -38,6 +48,11 @@ export interface SocialIdentity {
   subject?: string
   /** `google`, `firebase:apple.com`, … — recorded as the account's login type. */
   provider?: string
+  /**
+   * Whether the ISSUER vouched for the email. Only a verified email may be used
+   * to attach a social login to a pre-existing account — see linkTargetFor.
+   */
+  emailVerified?: boolean
 }
 
 export interface ProvisionResult {
@@ -46,10 +61,45 @@ export interface ProvisionResult {
   created: boolean
 }
 
+/**
+ * Find the account a social identity should attach to, or null to create one.
+ *
+ * `bySubject` is always trusted. `byEmail` is only trusted when the issuer
+ * verified the address — otherwise we refuse to link and let the caller decide
+ * (it throws upstream rather than silently creating a duplicate on a colliding
+ * email, which the unique index would reject anyway).
+ */
+export function linkTargetFor<T extends { _id: unknown; authProvider?: string | null }>(
+  identity: SocialIdentity,
+  bySubject: T | null,
+  byEmail: T | null,
+): { userId: string } | null {
+  if (bySubject) return { userId: String(bySubject._id) }
+  if (!byEmail) return null
+
+  if (identity.emailVerified !== true) {
+    // Never attach an unverified identity to an existing account.
+    throw new AppError(
+      401,
+      'IDENTITY_EMAIL_UNVERIFIED',
+      'Verify your email with your sign-in provider before continuing',
+      { email: identity.email },
+    )
+  }
+  return { userId: String(byEmail._id) }
+}
+
 /** Provision-or-find a customer from a verified social identity. */
 export async function provisionCustomer(identity: SocialIdentity): Promise<ProvisionResult> {
-  const existing = await customerRepo.findByEmail(identity.email)
-  if (existing) return { userId: String(existing._id), created: false }
+  const [bySubject, byEmail] = await Promise.all([
+    identity.subject && identity.provider
+      ? customerRepo.findByAuthSubject(identity.provider, identity.subject)
+      : Promise.resolve(null),
+    customerRepo.findByEmail(identity.email),
+  ])
+
+  const linked = linkTargetFor(identity, bySubject, byEmail)
+  if (linked) return { userId: linked.userId, created: false }
 
   const { firstName, lastName } = splitName(identity.name, identity.email)
   const ts = nowEpoch()
@@ -78,8 +128,15 @@ export async function provisionCustomer(identity: SocialIdentity): Promise<Provi
 
 /** Provision-or-find a cleaner from a verified social identity. */
 export async function provisionCleaner(identity: SocialIdentity): Promise<ProvisionResult> {
-  const existing = await cleanerRepo.findByEmail(identity.email)
-  if (existing) return { userId: String(existing._id), created: false }
+  const [bySubject, byEmail] = await Promise.all([
+    identity.subject && identity.provider
+      ? cleanerRepo.findByAuthSubject(identity.provider, identity.subject)
+      : Promise.resolve(null),
+    cleanerRepo.findByEmail(identity.email),
+  ])
+
+  const linked = linkTargetFor(identity, bySubject, byEmail)
+  if (linked) return { userId: linked.userId, created: false }
 
   const { firstName, lastName } = splitName(identity.name, identity.email)
   const ts = nowEpoch()
@@ -139,6 +196,18 @@ export async function signInWithIdToken(args: {
 }): Promise<SocialSignInResult> {
   const identity: VerifiedIdentity = await verifyIdentityToken(args.idToken)
 
+  // An issuer-verified email is a precondition for signing in at all. Firebase
+  // mints tokens for unconfirmed email/password accounts, so without this an
+  // attacker could register a victim's address and be handed their account.
+  if (!identity.emailVerified) {
+    throw new AppError(
+      401,
+      'IDENTITY_EMAIL_UNVERIFIED',
+      'Verify your email with your sign-in provider before continuing',
+      { email: identity.email, provider: identity.signInProvider ?? identity.issuer },
+    )
+  }
+
   const provider =
     identity.issuer === 'firebase'
       ? `firebase:${identity.signInProvider ?? 'unknown'}`
@@ -149,6 +218,7 @@ export async function signInWithIdToken(args: {
     name: identity.name,
     subject: identity.subject,
     provider,
+    emailVerified: identity.emailVerified,
   })
 
   // Keep the account's last-auth stamp current, same as password login.
