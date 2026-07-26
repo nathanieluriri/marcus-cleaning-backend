@@ -39,7 +39,15 @@ const EnvSchema = z
     REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().nonnegative().default(20),
     SESSION_SECRET_KEY: z.string().min(16).optional(),
 
-    // google oauth / maps
+    // firebase auth (native Google/Apple sign-in via the Firebase SDK).
+    // Falls back to FCM_PROJECT_ID when both features use the same project.
+    FIREBASE_PROJECT_ID: z.string().optional(),
+
+    // google oauth / maps.
+    // The iOS/Android client ids are additional accepted audiences for bare
+    // Google Sign-In SDK tokens (each platform gets its own client id).
+    GOOGLE_IOS_CLIENT_ID: z.string().optional(),
+    GOOGLE_ANDROID_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
     GOOGLE_REDIRECT_URI: z.string().optional(),

@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
-import { requireCustomer } from '@/server/security/guards'
+import { requireCustomer, principalOf } from '@/server/security/guards'
 import {
   CleanerBrowseQuery,
   CleanerCardOut,
@@ -55,6 +55,31 @@ bookingDiscovery.openapi(
   async (c) => {
     const items = await directory.browse(c.req.valid('query'))
     return c.json(ok(c, 'Cleaners fetched successfully', items), 200)
+  },
+)
+
+// GET /cleaners/recent — cleaners this customer has booked before.
+// MUST be registered before /cleaners/{cleanerId}, or "recent" is captured as an id.
+bookingDiscovery.openapi(
+  createRoute({
+    method: 'get',
+    path: '/cleaners/recent',
+    tags: ['Cleaner Discovery'],
+    summary: 'Cleaners this customer has booked before ("Book again")',
+    security: [{ bearerAuth: [] }],
+    request: { query: z.object({ limit: z.coerce.number().int().min(1).max(20).default(5) }) },
+    responses: {
+      200: {
+        description: 'Recently booked cleaners',
+        content: { 'application/json': { schema: envelopeOf(z.array(CleanerCardOut)) } },
+      },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorEnvelope } } },
+    },
+  }),
+  async (c) => {
+    const { limit } = c.req.valid('query')
+    const items = await directory.listRecentlyBooked(principalOf(c).userId, limit)
+    return c.json(ok(c, 'Recently booked cleaners fetched successfully', items), 200)
   },
 )
 

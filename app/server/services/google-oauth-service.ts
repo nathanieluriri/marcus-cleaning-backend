@@ -1,12 +1,11 @@
-import { randomBytes, createHash, randomUUID } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { getSettings } from '@/server/core/settings'
 import { AppError, badRequest } from '@/server/core/errors'
 import type { Role } from '@/server/security/principal'
 import * as oauthStateRepo from '@/server/repositories/oauth-state-repo'
-import * as customerRepo from '@/server/repositories/customer-repo'
-import * as cleanerRepo from '@/server/repositories/cleaner-repo'
 import * as sessions from './auth-session-service'
+import { provisionAccount } from './social-account-service'
 import type { DeviceInfo, IssuedTokens } from './auth-session-service'
 
 /**
@@ -128,73 +127,6 @@ async function verifyIdToken(idToken: string): Promise<{ sub: string; email: str
   return { sub, email: email.toLowerCase(), name: typeof payload.name === 'string' ? payload.name : undefined }
 }
 
-function splitName(name: string | undefined, email: string): { firstName: string; lastName: string } {
-  const trimmed = (name ?? '').trim()
-  if (!trimmed) return { firstName: email.split('@')[0] ?? 'User', lastName: '' }
-  const parts = trimmed.split(/\s+/)
-  return { firstName: parts[0], lastName: parts.slice(1).join(' ') }
-}
-
-function nowEpoch(): number {
-  return Math.floor(Date.now() / 1000)
-}
-
-/** Provision-or-find a customer account from a verified Google identity; returns its id. */
-async function provisionCustomer(identity: { email: string; name?: string }): Promise<string> {
-  const existing = await customerRepo.findByEmail(identity.email)
-  if (existing) return String(existing._id)
-  const { firstName, lastName } = splitName(identity.name, identity.email)
-  const ts = nowEpoch()
-  const created = await customerRepo.insertCustomer({
-    firstName,
-    lastName,
-    email: identity.email,
-    // OAuth accounts have no local password; store a random unusable hash placeholder.
-    password: `google-oauth:${randomUUID()}`,
-    phoneNumber: null,
-    avatarDocumentId: null,
-    accountStatus: 'ACTIVE',
-    loginType: 'google',
-    emailVerified: true,
-    preferredLanguage: 'en',
-    permissionList: null,
-    authProvider: 'google',
-    authSubject: identity.email,
-    lastAuthAt: ts,
-    dateCreated: ts,
-    lastUpdated: ts,
-  })
-  return created.id
-}
-
-/** Provision-or-find a cleaner account from a verified Google identity; returns its id. */
-async function provisionCleaner(identity: { email: string; name?: string }): Promise<string> {
-  const existing = await cleanerRepo.findByEmail(identity.email)
-  if (existing) return String(existing._id)
-  const { firstName, lastName } = splitName(identity.name, identity.email)
-  const ts = nowEpoch()
-  const created = await cleanerRepo.insertCleaner({
-    firstName,
-    lastName,
-    email: identity.email,
-    password: `google-oauth:${randomUUID()}`,
-    phoneNumber: null,
-    accountStatus: 'ACTIVE',
-    loginType: 'google',
-    onboardingStatus: 'NOT_STARTED',
-    allowAdminSelection: false,
-    emailVerified: true,
-    preferredLanguage: 'en',
-    permissionList: null,
-    authProvider: 'google',
-    authSubject: identity.email,
-    lastAuthAt: ts,
-    dateCreated: ts,
-    lastUpdated: ts,
-  })
-  return created.id
-}
-
 /**
  * Complete the OAuth callback: verify state, exchange the code, verify the
  * id_token, provision/find the account, and issue our own session.
@@ -216,10 +148,14 @@ export async function handleCallback(args: {
   const tokens = await exchangeCode(args.code, stored.codeVerifier)
   const identity = await verifyIdToken(tokens.id_token as string)
 
-  const userId =
-    args.role === 'cleaner'
-      ? await provisionCleaner({ email: identity.email, name: identity.name })
-      : await provisionCustomer({ email: identity.email, name: identity.name })
+  // Provisioning is shared with the native token-exchange flow so the two
+  // sign-in paths can never diverge on how an account is created or matched.
+  const { userId } = await provisionAccount(args.role, {
+    email: identity.email,
+    name: identity.name,
+    subject: identity.sub,
+    provider: 'google',
+  })
 
   const issued = await sessions.issueSession({ userId, role: args.role, device: args.device })
   return { ...issued, userId, email: identity.email }

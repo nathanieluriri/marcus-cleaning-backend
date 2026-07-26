@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi'
+import { BookingProgressOut } from './job-session'
 
 /**
  * Booking domain schemas (Zod + OpenAPI).
@@ -230,6 +231,12 @@ export const BookingOut = z
     rescheduleCount: z.number().int().default(0),
     dateCreated: z.number().int().nullable().default(null),
     lastUpdated: z.number().int().nullable().default(null),
+    /**
+     * Live job progress for the customer's "cleaner is on the way" bar.
+     * Populated on single-booking reads; null on list reads (it would cost one
+     * session lookup per row) — use GET /bookings/{id}/progress to poll.
+     */
+    progress: BookingProgressOut.nullable().default(null),
     // Display enrichment — resolved from serviceId / cleaner_id / place_id by
     // booking-enrichment.ts. Null when unresolved. Additive; existing mappers
     // ignore them. See docs/migration backend task #2.

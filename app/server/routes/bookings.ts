@@ -19,6 +19,8 @@ import { enrichBooking, enrichBookings } from '@/server/services/booking-enrichm
 import { computeQuote } from '@/server/services/pricing-service'
 import { withIdempotency } from '@/server/core/idempotency'
 import * as lifecycleService from '@/server/services/booking-lifecycle-service'
+import { getProgress, progressFor } from '@/server/services/booking-progress-service'
+import { BookingProgressOut } from '@/server/schemas/job-session'
 import { notifyBookingParties } from '@/server/services/notification-dispatch'
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import {
@@ -103,6 +105,7 @@ bookings.use('/:booking_id/payments/mark-paid', requireCustomer())
 bookings.use('/:booking_id/ratings', requireCustomer())
 bookings.use('/:booking_id/cancel', requireCustomerOrCleaner())
 bookings.use('/:booking_id/reschedule', requireCustomerOrCleaner())
+bookings.use('/:booking_id/progress', requireCustomerOrCleaner())
 
 // POST / — create (customer only; customer id derived from the principal) ---
 const createRouteDef = createRoute({
@@ -268,7 +271,34 @@ bookings.openapi(getRouteDef, async (c) => {
   const principal = principalOf(c)
   const { booking_id } = c.req.valid('param')
   const booking = await loadViewableBooking(principal, booking_id)
-  return c.json(ok(c, 'Booking retrieved successfully', await enrichBooking(booking)), 200)
+  const enriched = await enrichBooking(booking)
+  // Single reads carry live progress so the details screen needs one call.
+  return c.json(
+    ok(c, 'Booking retrieved successfully', { ...enriched, progress: await progressFor(enriched) }),
+    200,
+  )
+})
+
+// GET /{booking_id}/progress — cheap poll for the "on the way" bar -----------
+const progressRouteDef = createRoute({
+  method: 'get',
+  path: '/{booking_id}/progress',
+  tags: ['Bookings'],
+  summary: 'Live job progress for the customer-facing "cleaner is on the way" bar',
+  security: [{ bearerAuth: [] }],
+  request: { params: bookingIdParam },
+  responses: {
+    200: { description: 'Progress', content: { 'application/json': { schema: envelopeOf(BookingProgressOut) } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorEnvelope } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+
+bookings.openapi(progressRouteDef, async (c) => {
+  const { booking_id } = c.req.valid('param')
+  const progress = await getProgress({ principal: principalOf(c), bookingId: booking_id })
+  return c.json(ok(c, 'Progress retrieved successfully', progress), 200)
 })
 
 // POST /{booking_id}/accept — cleaner ---------------------------------------

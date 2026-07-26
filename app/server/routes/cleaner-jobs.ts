@@ -2,10 +2,15 @@ import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
 import { requireCleaner, principalOf } from '@/server/security/guards'
-import { CleanerJobOut, CleanerJobDeclineRequest } from '@/server/schemas/cleaner-job'
+import {
+  CleanerJobOut,
+  CleanerJobDeclineRequest,
+  CleanerJobListQuery,
+} from '@/server/schemas/cleaner-job'
 import {
   ChecklistTask,
   ChecklistToggleRequest,
+  EnRouteRequest,
   JobCompletionOut,
   JobSessionOut,
   SosAlertOut,
@@ -56,14 +61,16 @@ cleanerJobs.openapi(
     method: 'get',
     path: '/jobs',
     tags: ['Cleaner Jobs'],
+    summary: 'Job feed — filter by scope (available/assigned), radius and schedule',
     security: [{ bearerAuth: [] }],
+    request: { query: CleanerJobListQuery },
     responses: {
       200: { description: 'Jobs', content: { 'application/json': { schema: envelopeOf(z.array(CleanerJobOut)) } } },
       401: errs[401],
     },
   }),
   async (c) => {
-    const items = await jobsService.listJobs(principalOf(c))
+    const items = await jobsService.listJobs(principalOf(c), c.req.valid('query'))
     return c.json(ok(c, 'Jobs fetched successfully', items), 200)
   },
 )
@@ -138,6 +145,34 @@ const taskParam = z.object({
   jobId: z.string().openapi({ param: { name: 'jobId', in: 'path' }, example: '665f1b2c9a1e4b0012abcd34' }),
   taskId: z.string().openapi({ param: { name: 'taskId', in: 'path' }, example: 'kitchen-surfaces' }),
 })
+
+// POST /jobs/{jobId}/en-route — lights up the customer's "on the way" bar
+cleanerJobs.openapi(
+  createRoute({
+    method: 'post',
+    path: '/jobs/{jobId}/en-route',
+    tags: ['Cleaner Jobs'],
+    summary: 'Declare you are on the way, optionally with an ETA',
+    security: [{ bearerAuth: [] }],
+    request: { params: jobIdParam, body: { content: { 'application/json': { schema: EnRouteRequest } } } },
+    responses: {
+      200: { description: 'Marked en route', content: { 'application/json': { schema: envelopeOf(JobSessionOut) } } },
+      400: { description: 'Job not in an acceptable state', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...errs,
+    },
+  }),
+  async (c) => {
+    const { jobId } = c.req.valid('param')
+    const { etaAt, etaMinutes } = c.req.valid('json')
+    const session = await jobSessionService.markEnRoute({
+      principal: principalOf(c),
+      bookingId: jobId,
+      etaAt,
+      etaMinutes,
+    })
+    return c.json(ok(c, 'Marked as on the way', session), 200)
+  },
+)
 
 // POST /jobs/{jobId}/start — authoritative start time
 cleanerJobs.openapi(

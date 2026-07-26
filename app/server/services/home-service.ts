@@ -12,13 +12,15 @@ export async function getHome(principal: AuthPrincipal): Promise<HomePageModel> 
   const customer = await customerRepo.findById(principal.userId)
   if (!customer) throw notFound('Customer not found')
 
-  const [banners, serviceCategories, featuredCleaners, upcoming, past] = await Promise.all([
-    bannerRepo.list(),
-    catalogService.listServices(),
-    directory.browse({ onlyAvailableNow: false }),
-    bookingRepo.getBookingsHistory({ customerId: principal.userId, scope: 'upcoming', pageSize: 5 }),
-    bookingRepo.getBookingsHistory({ customerId: principal.userId, scope: 'past', pageSize: 5 }),
-  ])
+  const [banners, serviceCategories, featuredCleaners, recentCleaners, upcoming, past] =
+    await Promise.all([
+      bannerRepo.list(),
+      catalogService.listServices(),
+      directory.browse({ onlyAvailableNow: false }),
+      directory.listRecentlyBooked(principal.userId, 5),
+      bookingRepo.getBookingsHistory({ customerId: principal.userId, scope: 'upcoming', pageSize: 5 }),
+      bookingRepo.getBookingsHistory({ customerId: principal.userId, scope: 'past', pageSize: 5 }),
+    ])
 
   return HomePageModel.parse({
     greeting: buildGreeting(customer.firstName),
@@ -31,6 +33,7 @@ export async function getHome(principal: AuthPrincipal): Promise<HomePageModel> 
     banners: banners.filter((b) => b.active),
     serviceCategories,
     featuredCleaners: featuredCleaners.slice(0, 5),
+    recentCleaners,
     activeBookings: upcoming.items,
     recentBookings: past.items,
   })

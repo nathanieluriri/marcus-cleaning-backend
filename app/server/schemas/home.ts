@@ -26,6 +26,8 @@ export const HomePageModel = z
     banners: z.array(BannerOut).default([]),
     serviceCategories: z.array(CatalogServiceOut).default([]),
     featuredCleaners: z.array(CleanerCardOut).default([]),
+    /** Cleaners this customer has booked before — the "Book again" row. */
+    recentCleaners: z.array(CleanerCardOut).default([]),
     activeBookings: z.array(BookingOut).default([]),
     recentBookings: z.array(BookingOut).default([]),
   })

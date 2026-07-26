@@ -5,7 +5,13 @@ import { applyTransition } from '@/server/services/booking-state-machine'
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import * as customerRepo from '@/server/repositories/customer-repo'
 import * as generic from '@/server/repositories/admin-features/_generic-repo'
-import { mapBookingToCleanerJob, type CleanerJobOut } from '@/server/schemas/cleaner-job'
+import * as savedAddressRepo from '@/server/repositories/saved-address-repo'
+import { distanceMiles, toCoordinates, type Coordinates } from '@/server/services/geo'
+import {
+  mapBookingToCleanerJob,
+  type CleanerJobListQuery,
+  type CleanerJobOut,
+} from '@/server/schemas/cleaner-job'
 import type { BookingOut } from '@/server/schemas/booking'
 
 /**
@@ -32,16 +38,72 @@ async function serviceTitle(serviceId: string | null): Promise<string> {
   return typeof title === 'string' ? title : 'Cleaning'
 }
 
-/** Enrich a BookingOut into a CleanerJob (resolves client name, service title, address). */
-async function enrich(b: BookingOut): Promise<CleanerJobOut> {
-  const [name, title] = await Promise.all([clientName(b.customer_id), serviceTitle(b.serviceId)])
-  return mapBookingToCleanerJob(b, { title, clientName: name, address: null })
+/**
+ * The booking's location, from the customer's saved address for that place.
+ * Returns null when the address was never saved with coordinates.
+ */
+async function locationOf(b: BookingOut): Promise<{ coords: Coordinates | null; address: string | null }> {
+  if (!b.place_id) return { coords: null, address: null }
+  const addr = await savedAddressRepo.findByPlaceId(b.customer_id, b.place_id)
+  if (!addr) return { coords: null, address: null }
+  return {
+    coords: toCoordinates(addr.latitude, addr.longitude),
+    address: addr.formattedAddress ?? addr.label ?? null,
+  }
 }
 
-/** The cleaner's job feed: assigned + unassigned pool, minus declined. */
-export async function listJobs(principal: AuthPrincipal): Promise<CleanerJobOut[]> {
+/**
+ * Enrich a BookingOut into a CleanerJob (client name, service title, address),
+ * computing a real `distanceMiles` when the caller gave us their position.
+ */
+async function enrich(b: BookingOut, origin?: Coordinates | null): Promise<CleanerJobOut> {
+  const [name, title, location] = await Promise.all([
+    clientName(b.customer_id),
+    serviceTitle(b.serviceId),
+    locationOf(b),
+  ])
+  const job = mapBookingToCleanerJob(b, { title, clientName: name, address: location.address })
+  if (origin && location.coords) job.distanceMiles = distanceMiles(origin, location.coords)
+  return job
+}
+
+/**
+ * The cleaner's job feed: assigned + unassigned pool, minus declined.
+ *
+ * Filtering by radius requires coordinates from the caller. Without them the
+ * radius is ignored rather than silently filtering everything out — an empty
+ * Available Jobs tab is worse than an unfiltered one.
+ */
+export async function listJobs(
+  principal: AuthPrincipal,
+  query?: CleanerJobListQuery,
+): Promise<CleanerJobOut[]> {
+  const q = query ?? { scope: 'all' as const, sort: 'schedule' as const }
   const bookings = await bookingRepo.getCleanerJobFeed(principal.userId)
-  return Promise.all(bookings.map(enrich))
+  const origin = toCoordinates(q.lat, q.lng)
+
+  const scoped = bookings.filter((b) => {
+    if (q.scope === 'assigned' && b.cleaner_id !== principal.userId) return false
+    if (q.scope === 'available' && b.cleaner_id != null) return false
+    if (q.status && b.status !== q.status) return false
+    if (q.from != null && b.schedule < q.from) return false
+    if (q.to != null && b.schedule >= q.to) return false
+    return true
+  })
+
+  let items = await Promise.all(scoped.map((b) => enrich(b, origin)))
+
+  if (origin && q.radiusMiles != null) {
+    // A job with no resolvable coordinates is kept: excluding it would hide
+    // real work because of missing address data rather than distance.
+    items = items.filter((j) => j.distanceMiles == null || j.distanceMiles <= q.radiusMiles!)
+  }
+
+  if (q.sort === 'distance' && origin) {
+    items.sort((a, b) => (a.distanceMiles ?? Infinity) - (b.distanceMiles ?? Infinity))
+  }
+
+  return items
 }
 
 /** A single job, visible to this cleaner (assigned to them or an open pool job). */
