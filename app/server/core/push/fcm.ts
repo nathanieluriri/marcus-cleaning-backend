@@ -74,6 +74,19 @@ export interface PushMessage {
   data?: Record<string, string>
   /** Drives the app's notification-tab badge. */
   badge?: number
+  /**
+   * Android channel id. The channel must already exist in the app — Android 8+
+   * takes the sound from the channel, not from this message.
+   */
+  channelId?: string
+  /** iOS sound filename bundled in the app, or `default`. */
+  sound?: string
+  /**
+   * Collapses repeat notifications about the same thing into one tray entry
+   * (FCM collapse_key / APNs apns-collapse-id / Android tag). Twenty chat
+   * messages should be one entry, not twenty.
+   */
+  collapseKey?: string
 }
 
 export type SendOutcome =
@@ -96,9 +109,24 @@ export async function send(msg: PushMessage): Promise<SendOutcome> {
             notification: { title: msg.title, body: msg.body },
             data: msg.data ?? {},
             apns: {
-              payload: { aps: { sound: 'default', badge: msg.badge ?? 0 } },
+              // apns-collapse-id replaces the previous notification for the same
+              // key instead of stacking a new one.
+              ...(msg.collapseKey ? { headers: { 'apns-collapse-id': msg.collapseKey } } : {}),
+              payload: { aps: { sound: msg.sound ?? 'default', badge: msg.badge ?? 0 } },
             },
-            android: { notification: { sound: 'default' }, priority: 'HIGH' },
+            android: {
+              priority: 'HIGH',
+              // collapse_key drops undelivered duplicates in transit; `tag`
+              // replaces the visible tray entry. Both are needed.
+              ...(msg.collapseKey ? { collapse_key: msg.collapseKey } : {}),
+              notification: {
+                // `sound` is honoured pre-Android 8 only; from 8+ the channel
+                // owns it, which is why channel_id is the meaningful field.
+                sound: msg.sound && msg.sound !== 'default' ? msg.sound.replace(/\.[^.]+$/, '') : 'default',
+                channel_id: msg.channelId,
+                ...(msg.collapseKey ? { tag: msg.collapseKey } : {}),
+              },
+            },
           },
         }),
       },

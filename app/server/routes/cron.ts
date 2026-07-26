@@ -1,6 +1,7 @@
 import { createRouter } from '@/server/core/router'
 import { getSettings } from '@/server/core/settings'
 import * as paymentService from '@/server/services/payment-service'
+import * as broadcastService from '@/server/services/broadcast-service'
 
 /**
  * Vercel Cron handlers (secured by CRON_SECRET, idempotent).
@@ -40,6 +41,14 @@ cron.get('/reconcile-payments', async (c) => {
 // Stubbed idempotently for now so the cron declaration is valid and harmless.
 cron.get('/account-lifecycle', async (c) => {
   return c.json({ success: true, processed: 0 })
+})
+
+// GET /drain-broadcasts — fan out queued admin broadcasts, batch by batch.
+// Resumable: each batch advances processedCount, so an overlapping or retried
+// invocation continues rather than re-notifying anyone.
+cron.get('/drain-broadcasts', async (c) => {
+  const result = await broadcastService.processPending()
+  return c.json({ success: true, ...result })
 })
 
 // GET /expire-cleanup — belt-and-suspenders for anything not covered by TTL indexes
