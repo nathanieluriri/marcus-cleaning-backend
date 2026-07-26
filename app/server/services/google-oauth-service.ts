@@ -155,6 +155,8 @@ export async function handleCallback(args: {
     name: identity.name,
     subject: identity.sub,
     provider: 'google',
+    // verifyIdToken already rejects unverified Google emails.
+    emailVerified: true,
   })
 
   const issued = await sessions.issueSession({ userId, role: args.role, device: args.device })
