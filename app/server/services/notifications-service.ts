@@ -17,9 +17,26 @@ function nowEpoch(): number {
   return Math.floor(Date.now() / 1000)
 }
 
-/** List the calling customer's notifications. */
+/** Notifications are addressed by role; cleaners have their own feed. */
+function recipientRole(principal: AuthPrincipal): 'customer' | 'cleaner' {
+  return principal.role === 'cleaner' ? 'cleaner' : 'customer'
+}
+
+/** List the caller's notifications. */
 export async function listNotifications(args: { principal: AuthPrincipal }): Promise<NotificationOut[]> {
-  return notificationsRepo.list({ customer_id: args.principal.userId })
+  return notificationsRepo.list({
+    customer_id: args.principal.userId,
+    recipientRole: recipientRole(args.principal),
+  })
+}
+
+/** Unread count for the notification-tab badge. */
+export async function unreadCount(args: { principal: AuthPrincipal }): Promise<{ unread: number }> {
+  const unread = await notificationsRepo.countUnread(
+    args.principal.userId,
+    recipientRole(args.principal),
+  )
+  return { unread }
 }
 
 /** Load a notification owned by the caller (404 if missing, 403 if not owner). */
@@ -29,7 +46,10 @@ export async function getNotification(args: {
 }): Promise<NotificationOut> {
   const notification = await notificationsRepo.getById(args.id)
   if (!notification) throw notFound('Notification not found')
-  if (notification.customer_id !== args.principal.userId) {
+  const sameRecipient =
+    notification.customer_id === args.principal.userId &&
+    notification.recipientRole === recipientRole(args.principal)
+  if (!sameRecipient) {
     throw forbidden('You are not allowed to access this notification')
   }
   return notification
@@ -43,6 +63,7 @@ export async function createNotification(args: {
   const ts = nowEpoch()
   return notificationsRepo.insert({
     customer_id: args.principal.userId,
+    recipientRole: recipientRole(args.principal),
     title: args.payload.title,
     body: args.payload.body,
     type: args.payload.type ?? null,
@@ -81,8 +102,11 @@ export async function deleteNotification(args: {
   if (!deleted) throw notFound('Notification not found')
 }
 
-/** Mark all of the calling customer's notifications as read. Returns the count updated. */
+/** Mark all of the caller's notifications as read. Returns the count updated. */
 export async function markAllRead(args: { principal: AuthPrincipal }): Promise<{ updated: number }> {
-  const updated = await notificationsRepo.markAllRead(args.principal.userId)
+  const updated = await notificationsRepo.markAllRead(
+    args.principal.userId,
+    recipientRole(args.principal),
+  )
   return { updated }
 }

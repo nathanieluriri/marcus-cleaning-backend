@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { forbidden, notFound } from '@/server/core/errors'
+import { badRequest, forbidden, notFound } from '@/server/core/errors'
+import { getSettings } from '@/server/core/settings'
 import { getStorageProvider } from '@/server/core/storage/manager'
 import * as documentRepo from '@/server/repositories/document-repo'
 import { DocumentOut, type CompleteUploadRequest, type DocumentOut as DocumentOutType, type UploadIntentOut, type UploadIntentRequest } from '@/server/schemas/document'
@@ -25,10 +26,44 @@ function buildKey(ownerId: string, fileName: string): string {
   return `documents/${ownerId}/${randomUUID()}-${safeName(fileName)}`
 }
 
+/**
+ * Content types accepted for uploads. The staff app's ID-document step states
+ * "PNG, JPG or PDF up to 10MB"; this is the server-side enforcement of that
+ * promise, applied to every upload rather than just ID documents.
+ */
+export const ALLOWED_CONTENT_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/heic',
+  'image/webp',
+  'application/pdf',
+] as const
+
+/**
+ * Reject unsupported types and oversized files before minting a presigned URL.
+ * `size` is client-declared here; the storage provider enforces the real limit
+ * on the presigned request, and `/complete` re-checks the stored object.
+ */
+function assertUploadAllowed(payload: UploadIntentRequest): void {
+  const contentType = payload.contentType.toLowerCase().split(';')[0].trim()
+  if (!ALLOWED_CONTENT_TYPES.includes(contentType as (typeof ALLOWED_CONTENT_TYPES)[number])) {
+    throw badRequest('Unsupported file type', {
+      contentType: payload.contentType,
+      allowed: ALLOWED_CONTENT_TYPES,
+    })
+  }
+  const max = getSettings().DOCUMENT_MAX_UPLOAD_BYTES
+  if (payload.size != null && payload.size > max) {
+    throw badRequest('File is too large', { size: payload.size, maxBytes: max })
+  }
+}
+
 export async function createUploadIntent(
   ownerId: string,
   payload: UploadIntentRequest,
 ): Promise<UploadIntentOut> {
+  assertUploadAllowed(payload)
   const objectKey = buildKey(ownerId, payload.fileName)
   const ts = nowEpoch()
   const stored = await documentRepo.insertDocument({

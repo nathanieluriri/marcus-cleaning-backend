@@ -45,6 +45,50 @@ function makeGuard(role: Role) {
     })
 }
 
+/**
+ * Guard accepting EITHER a customer or a cleaner access token, for endpoints
+ * both apps share (booking reads, chat, device registration). Each candidate
+ * audience is tried in turn; downstream code narrows visibility by role.
+ */
+export function requireAnyOf(...roles: Role[]) {
+  return () =>
+    createMiddleware<Env>(async (c, next) => {
+      const token = bearer(c.req.header('Authorization'))
+
+      let principal: AuthPrincipal | null = null
+      let lastErr: unknown = null
+      for (const role of roles) {
+        try {
+          const claims = await verifyAccessToken(token, ROLE_TO_AUDIENCE[role])
+          if (claims.role !== role) continue
+          const account = await retrieveAccountById(role, claims.sub)
+          if (!account) throw authInvalidToken({ reason: 'Account not found' })
+          if (role !== 'admin' && account.accountStatus !== 'ACTIVE') {
+            throw new AppError(403, 'ACCOUNT_NOT_ACTIVE', 'Account is not active', {
+              accountStatus: account.accountStatus,
+            })
+          }
+          principal = {
+            userId: claims.sub,
+            role: claims.role,
+            audience: claims.audience,
+            sessionId: claims.sessionId,
+          }
+          break
+        } catch (err) {
+          lastErr = err
+        }
+      }
+      if (!principal) {
+        throw lastErr ?? authInvalidToken({ reason: `Token not valid for ${roles.join(' or ')}` })
+      }
+      c.set('principal', principal)
+      await next()
+    })
+}
+
+export const requireCustomerOrCleaner = requireAnyOf('customer', 'cleaner')
+
 export const requireCustomer = makeGuard('customer')
 export const requireCleaner = makeGuard('cleaner')
 export const requireAdmin = makeGuard('admin')

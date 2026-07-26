@@ -1,13 +1,14 @@
 import { createRoute, z } from '@hono/zod-openapi'
-import { createMiddleware } from 'hono/factory'
 import { createRouter } from '@/server/core/router'
 import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
-import type { AppContext, Env } from '@/server/core/http-env'
-import { authInvalidToken, AppError, badRequest } from '@/server/core/errors'
-import { requireCustomer, requireCleaner, principalOf } from '@/server/security/guards'
-import { verifyAccessToken } from '@/server/security/jwt'
-import { ROLE_TO_AUDIENCE, type AuthPrincipal, type Role } from '@/server/security/principal'
-import { retrieveAccountById } from '@/server/services/role-account-gateway'
+import type { AppContext } from '@/server/core/http-env'
+import { AppError, badRequest } from '@/server/core/errors'
+import {
+  requireCustomer,
+  requireCleaner,
+  requireCustomerOrCleaner,
+  principalOf,
+} from '@/server/security/guards'
 import {
   loadViewableBooking,
   loadCustomerBooking,
@@ -16,8 +17,14 @@ import {
 import { applyTransition } from '@/server/services/booking-state-machine'
 import { enrichBooking, enrichBookings } from '@/server/services/booking-enrichment'
 import { computeQuote } from '@/server/services/pricing-service'
+import { withIdempotency } from '@/server/core/idempotency'
+import * as lifecycleService from '@/server/services/booking-lifecycle-service'
+import { notifyBookingParties } from '@/server/services/notification-dispatch'
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import {
+  BookingCancelRequest,
+  BookingCancellationOut,
+  BookingRescheduleRequest,
   BookingCustomerCreateRequest,
   resolveAddons,
   BookingListQuery,
@@ -58,50 +65,31 @@ function nowEpoch(): number {
 }
 
 /**
- * Pricing — STUB. The real computation lives in pricing-service (another task).
- * For now we passthrough a null price; payment-status drives paid state.
+ * Server-authoritative price for a new booking. The client never supplies a
+ * price; it is recomputed here from the same catalog the quote endpoint reads,
+ * so a tampered or stale client total cannot be persisted.
  */
-function computePrice(_payload: BookingCustomerCreateRequest): { price: number | null; currency: string | null } {
-  return { price: null, currency: null }
+async function computePrice(
+  payload: BookingCustomerCreateRequest,
+): Promise<{ price: number | null; currency: string | null }> {
+  const quote = await computeQuote(payload.serviceId, resolveAddons(payload))
+  return { price: quote.total, currency: quote.currency }
 }
 
-/**
- * Guard that accepts EITHER a customer or a cleaner access token (the shared
- * read endpoints `GET /` and `GET /{booking_id}`). Mirrors the role guards in
- * security/guards.ts but tries both audiences; visibility is then narrowed by
- * the booking-access helpers.
- */
-function requireCustomerOrCleaner() {
-  const candidates: Role[] = ['customer', 'cleaner']
-  return createMiddleware<Env>(async (c, next) => {
-    const authHeader = c.req.header('Authorization')
-    if (!authHeader?.startsWith('Bearer ')) throw authInvalidToken({ reason: 'Missing bearer token' })
-    const token = authHeader.slice(7)
-
-    let principal: AuthPrincipal | null = null
-    let lastErr: unknown = null
-    for (const role of candidates) {
-      try {
-        const claims = await verifyAccessToken(token, ROLE_TO_AUDIENCE[role])
-        if (claims.role !== role) continue
-        const account = await retrieveAccountById(role, claims.sub)
-        if (!account) throw authInvalidToken({ reason: 'Account not found' })
-        if (account.accountStatus !== 'ACTIVE') {
-          throw new AppError(403, 'ACCOUNT_NOT_ACTIVE', 'Account is not active', {
-            accountStatus: account.accountStatus,
-          })
-        }
-        principal = { userId: claims.sub, role: claims.role, audience: claims.audience, sessionId: claims.sessionId }
-        break
-      } catch (err) {
-        lastErr = err
-      }
-    }
-    if (!principal) throw lastErr ?? authInvalidToken({ reason: 'Token not valid for customer or cleaner' })
-    c.set('principal', principal)
-    await next()
-  })
-}
+/** Optional `Idempotency-Key` header, documented on the unsafe POSTs. */
+const IdempotencyHeader = z.object({
+  'idempotency-key': z
+    .string()
+    .min(8)
+    .max(200)
+    .optional()
+    .openapi({
+      // Key and param name must match (Hono lowercases incoming header names);
+      // clients may still send the conventional `Idempotency-Key` casing.
+      param: { name: 'idempotency-key', in: 'header', required: false },
+      description: 'Retry-safe key. A repeat with the same key and body replays the original response.',
+    }),
+})
 
 // --- guards (applied before the matching openapi() calls) ------------------
 bookings.use('/', requireCustomerOrCleaner()) // covers POST + GET on '/' — POST re-checked below
@@ -113,6 +101,8 @@ bookings.use('/:booking_id/complete', requireCleaner())
 bookings.use('/:booking_id/acknowledge', requireCustomer())
 bookings.use('/:booking_id/payments/mark-paid', requireCustomer())
 bookings.use('/:booking_id/ratings', requireCustomer())
+bookings.use('/:booking_id/cancel', requireCustomerOrCleaner())
+bookings.use('/:booking_id/reschedule', requireCustomerOrCleaner())
 
 // POST / — create (customer only; customer id derived from the principal) ---
 const createRouteDef = createRoute({
@@ -120,7 +110,7 @@ const createRouteDef = createRoute({
   path: '/',
   tags: ['Bookings'],
   security: [{ bearerAuth: [] }],
-  request: { body: { content: { 'application/json': { schema: BookingCustomerCreateRequest } } } },
+  request: { headers: IdempotencyHeader, body: { content: { 'application/json': { schema: BookingCustomerCreateRequest } } } },
   responses: {
     201: { description: 'Booking created', content: { 'application/json': { schema: envelopeOf(BookingOut) } } },
     ...commonErrors,
@@ -133,31 +123,61 @@ async function createBookingFrom(c: AppContext, payload: BookingCustomerCreateRe
   // The shared guard allows cleaners through; creation is customer-only.
   if (principal.role !== 'customer') throw new AppError(403, 'AUTH_ROLE_MISMATCH', 'Role not permitted', { required: 'customer', actual: principal.role })
 
-  const ts = nowEpoch()
-  const { price, currency } = computePrice(payload)
+  // Idempotent under `Idempotency-Key`: a double tap or a retried request
+  // replays the first booking instead of creating a second one.
+  const result = await withIdempotency({
+    scope: 'booking.create',
+    key: c.req.header('Idempotency-Key'),
+    actorId: principal.userId,
+    body: payload,
+    httpStatus: 201,
+    operation: async () => {
+      const ts = nowEpoch()
+      const { price, currency } = await computePrice(payload)
 
-  const doc: BookingDoc = {
-    customer_id: principal.userId, // derived from token, NOT the request body
-    cleaner_id: payload.cleanerId ?? null,
-    serviceId: payload.serviceId,
-    place_id: payload.placeId,
-    status: 'PENDING',
-    schedule: payload.schedule,
-    addons: resolveAddons(payload),
-    notes: payload.notes ?? null,
-    price,
-    currency,
-    payment_id: null,
-    payment_status: 'UNPAID',
-    rating: null,
-    acceptedAt: null,
-    completedAt: null,
-    acknowledgedAt: null,
-    dateCreated: ts,
-    lastUpdated: ts,
-  }
-  const created = await bookingRepo.createBooking(doc)
-  return c.json(ok(c, 'Booking created successfully', await enrichBooking(created)), 201)
+      const doc: BookingDoc = {
+        customer_id: principal.userId, // derived from token, NOT the request body
+        cleaner_id: payload.cleanerId ?? null,
+        serviceId: payload.serviceId,
+        place_id: payload.placeId,
+        status: 'PENDING',
+        schedule: payload.schedule,
+        addons: resolveAddons(payload),
+        notes: payload.notes ?? null,
+        price,
+        currency,
+        payment_id: null,
+        payment_status: 'UNPAID',
+        rating: null,
+        acceptedAt: null,
+        completedAt: null,
+        acknowledgedAt: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        cancellationReason: null,
+        cancellationFee: null,
+        rescheduleCount: 0,
+        dateCreated: ts,
+        lastUpdated: ts,
+      }
+      const created = await bookingRepo.createBooking(doc)
+      const enriched = await enrichBooking(created)
+
+      // Assigned up-front? Tell the cleaner. Pool jobs surface via the job feed.
+      if (created.cleaner_id) {
+        await notifyBookingParties({
+          booking: created,
+          actorRole: 'customer',
+          title: 'New booking request',
+          body: 'A customer has requested you for a cleaning.',
+          type: 'booking.created',
+        })
+      }
+      return enriched
+    },
+  })
+
+  return c.json(ok(c, 'Booking created successfully', result.data), 201)
 }
 
 bookings.openapi(createRouteDef, async (c) => createBookingFrom(c, c.req.valid('json')))
@@ -168,7 +188,7 @@ const createAliasDef = createRoute({
   path: '/create',
   tags: ['Bookings'],
   security: [{ bearerAuth: [] }],
-  request: { body: { content: { 'application/json': { schema: BookingCustomerCreateRequest } } } },
+  request: { headers: IdempotencyHeader, body: { content: { 'application/json': { schema: BookingCustomerCreateRequest } } } },
   responses: {
     201: { description: 'Booking created', content: { 'application/json': { schema: envelopeOf(BookingOut) } } },
     ...commonErrors,
@@ -421,4 +441,59 @@ bookings.openapi(ratingRouteDef, async (c) => {
     lastUpdated: nowEpoch(),
   })
   return c.json(ok(c, 'Booking rated successfully', updated!), 200)
+})
+
+// POST /{booking_id}/cancel — customer or assigned cleaner --------------------
+const cancelRouteDef = createRoute({
+  method: 'post',
+  path: '/{booking_id}/cancel',
+  tags: ['Bookings'],
+  security: [{ bearerAuth: [] }],
+  request: { params: bookingIdParam, body: { content: { 'application/json': { schema: BookingCancelRequest } } } },
+  responses: {
+    200: { description: 'Booking cancelled', content: { 'application/json': { schema: envelopeOf(BookingCancellationOut) } } },
+    400: { description: 'Illegal transition', content: { 'application/json': { schema: ErrorEnvelope } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorEnvelope } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+
+bookings.openapi(cancelRouteDef, async (c) => {
+  const { booking_id } = c.req.valid('param')
+  const payload = c.req.valid('json')
+  const result = await lifecycleService.cancelBooking({
+    principal: principalOf(c),
+    bookingId: booking_id,
+    reason: payload.reason ?? null,
+  })
+  return c.json(ok(c, 'Booking cancelled successfully', result), 200)
+})
+
+// POST /{booking_id}/reschedule — customer or assigned cleaner ---------------
+const rescheduleRouteDef = createRoute({
+  method: 'post',
+  path: '/{booking_id}/reschedule',
+  tags: ['Bookings'],
+  security: [{ bearerAuth: [] }],
+  request: { params: bookingIdParam, body: { content: { 'application/json': { schema: BookingRescheduleRequest } } } },
+  responses: {
+    200: { description: 'Booking rescheduled', content: { 'application/json': { schema: envelopeOf(BookingOut) } } },
+    400: { description: 'Cannot reschedule', content: { 'application/json': { schema: ErrorEnvelope } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorEnvelope } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorEnvelope } } },
+    ...commonErrors,
+  },
+})
+
+bookings.openapi(rescheduleRouteDef, async (c) => {
+  const { booking_id } = c.req.valid('param')
+  const payload = c.req.valid('json')
+  const updated = await lifecycleService.rescheduleBooking({
+    principal: principalOf(c),
+    bookingId: booking_id,
+    schedule: payload.schedule,
+    reason: payload.reason ?? null,
+  })
+  return c.json(ok(c, 'Booking rescheduled successfully', updated), 200)
 })

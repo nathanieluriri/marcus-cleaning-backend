@@ -30,6 +30,13 @@ import { banners } from './routes/banners'
 import { customerOauth, cleanerOauth } from './routes/oauth'
 import { cleanerJobs } from './routes/cleaner-jobs'
 import { cleanerProfile } from './routes/cleaner-profile'
+import { cleanerApplications } from './routes/cleaner-applications'
+import { cleanerWorkspace } from './routes/cleaner-workspace'
+import { adminSafety } from './routes/admin-safety'
+import { chat } from './routes/chat'
+import { devices } from './routes/devices'
+import { promotions } from './routes/promotions'
+import { support, faq } from './routes/support'
 import { cron } from './routes/cron'
 
 /**
@@ -78,9 +85,12 @@ app.route('/api/v1/cleaners', cleaners)
 app.route('/api/v1/cleaners', cleanerOauth)
 app.route('/api/v1/cleaner', cleanerJobs)
 app.route('/api/v1/cleaner', cleanerProfile)
+app.route('/api/v1/cleaner', cleanerApplications)
+app.route('/api/v1/cleaner', cleanerWorkspace)
 app.route('/api/v1/admins', admins)
 app.route('/api/v1/admins', adminCore)
 app.route('/api/v1/admins', adminFeatures)
+app.route('/api/v1/admins', adminSafety)
 app.route('/api/v1/bookings', bookingDiscovery)
 app.route('/api/v1/bookings', bookings)
 app.route('/api/v1/payments', payments)
@@ -91,6 +101,11 @@ app.route('/api/v1/services', catalog)
 app.route('/api/v1/home', home)
 app.route('/api/v1/notifications', notifications)
 app.route('/api/v1/banners', banners)
+app.route('/api/v1/conversations', chat)
+app.route('/api/v1/devices', devices)
+app.route('/api/v1/promotions', promotions)
+app.route('/api/v1/support', support)
+app.route('/api/v1/faq', faq)
 app.route('/api/cron', cron)
 app.route('/api', health)
 
