@@ -105,7 +105,10 @@ async function notifyEnRoute(booking: BookingOut, etaAt: number | null): Promise
     title: 'Your cleaner is on the way',
     body: `Your cleaner is heading to your address.${when}`,
     type: 'job.en_route',
-    data: etaAt ? { etaAt } : undefined,
+    // Both forms: `etaAt` is unix EPOCH SECONDS (consistent with the rest of the
+    // API), `etaAtIso` is ISO-8601 UTC for clients that would rather not guess
+    // the unit.
+    data: etaAt ? { etaAt, etaAtIso: new Date(etaAt * 1000).toISOString() } : undefined,
   })
 }
 

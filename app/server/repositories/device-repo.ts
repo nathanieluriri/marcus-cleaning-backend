@@ -60,6 +60,25 @@ export async function listFor(userId: string, role: 'customer' | 'cleaner'): Pro
   return rows.map(toOut)
 }
 
+/**
+ * How many of the given users have at least one active device. Powers the
+ * "reachable by push" figure in the broadcast dry-run, so an admin knows the
+ * difference between audience size and actual push reach.
+ */
+export async function countReachable(
+  userIds: string[],
+  role: 'customer' | 'cleaner',
+): Promise<number> {
+  if (userIds.length === 0) return 0
+  await ensureIndexes()
+  const distinct = await collection().distinct('userId', {
+    userId: { $in: userIds },
+    role,
+    $or: [{ disabledAt: null }, { disabledAt: { $exists: false } }],
+  })
+  return distinct.length
+}
+
 /** Remove a registration. Scoped to the owner so one user cannot unregister another's. */
 export async function removeById(
   id: string,

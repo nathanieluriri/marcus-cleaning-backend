@@ -167,6 +167,26 @@ export async function getCleanerJobFeed(cleanerId: string): Promise<BookingOutTy
   return rows.map(parse)
 }
 
+/**
+ * Distinct customer ids that have ever booked. Used to split the
+ * "has booked" / "never booked" broadcast audiences.
+ */
+export async function distinctCustomerIds(): Promise<string[]> {
+  await ensureIndexes()
+  const ids = await collection().distinct('customer_id', {})
+  return ids.filter((id): id is string => typeof id === 'string')
+}
+
+/** Distinct customer ids with a booking scheduled at or after `since`. */
+export async function customerIdsActiveSince(since: number): Promise<string[]> {
+  await ensureIndexes()
+  const ids = await collection().distinct('customer_id', {
+    schedule: { $gte: since },
+    status: { $ne: 'CANCELLED' },
+  })
+  return ids.filter((id): id is string => typeof id === 'string')
+}
+
 /** Record that a cleaner has passed on an (unassigned) job. */
 export async function addDecline(bookingId: string, cleanerId: string): Promise<void> {
   await ensureIndexes()

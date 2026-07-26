@@ -50,6 +50,29 @@ export async function findById(id: string): Promise<WithId<CustomerDoc> | null> 
   return collection().findOne(idFilter(id))
 }
 
+/** Ids of all ACTIVE customers — the base population for broadcasts. */
+export async function listActiveIds(): Promise<string[]> {
+  await ensureIndexes()
+  const rows = await collection()
+    .find({ accountStatus: 'ACTIVE' }, { projection: { _id: 1 } })
+    .toArray()
+  return rows.map((r) => String(r._id))
+}
+
+/**
+ * Ids that have explicitly turned marketing notifications OFF.
+ *
+ * Only an explicit `false` counts — an account that has never touched the
+ * setting is opted IN, matching the documented default.
+ */
+export async function listMarketingOptOutIds(): Promise<string[]> {
+  await ensureIndexes()
+  const rows = await collection()
+    .find({ 'settings.notifications.marketing': false }, { projection: { _id: 1 } })
+    .toArray()
+  return rows.map((r) => String(r._id))
+}
+
 export async function insertCustomer(doc: CustomerDoc): Promise<CustomerOutType> {
   await ensureIndexes()
   const result = await collection().insertOne(doc)

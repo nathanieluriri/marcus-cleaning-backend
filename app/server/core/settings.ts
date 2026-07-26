@@ -87,6 +87,17 @@ const EnvSchema = z
     /** Service-account private key (PEM). Newlines may be escaped as \n. */
     FCM_PRIVATE_KEY: z.string().optional(),
 
+    /**
+     * URI scheme for notification deep links (`<scheme>://bookings/123`).
+     * Confirm with the app team before changing — it must match the scheme
+     * registered in the Android manifest and iOS Info.plist.
+     */
+    APP_DEEP_LINK_SCHEME: z.string().default('marcuscleaning'),
+
+    // broadcasts
+    /** Recipients processed per batch when fanning out an admin broadcast. */
+    BROADCAST_BATCH_SIZE: z.coerce.number().int().positive().max(2000).default(500),
+
     // payouts
     PAYOUT_CASH_OUT_MIN: z.coerce.number().nonnegative().default(20),
     PAYOUT_CASH_OUT_FEE: z.coerce.number().nonnegative().default(1.5),
