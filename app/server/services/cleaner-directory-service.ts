@@ -75,6 +75,64 @@ export async function browse(filter: CleanerBrowseQuery): Promise<CleanerCardOut
   })
 }
 
+/**
+ * Cleaners this customer has actually booked before, most recent first.
+ *
+ * Distinct from `browse()`'s featured list: this is the customer's own history,
+ * which is what the home screen's "Book again" row is for.
+ */
+export async function listRecentlyBooked(
+  customerId: string,
+  limit = 5,
+): Promise<CleanerCardOut[]> {
+  const history = await bookingRepo.getBookingsHistory({
+    customerId,
+    scope: 'all',
+    scheduledSort: 'desc',
+    // Over-fetch: many bookings collapse to few distinct cleaners, and some
+    // have no cleaner assigned at all.
+    pageSize: 50,
+  })
+
+  const seen = new Set<string>()
+  const cleanerIds: string[] = []
+  for (const booking of history.items) {
+    if (!booking.cleaner_id || seen.has(booking.cleaner_id)) continue
+    seen.add(booking.cleaner_id)
+    cleanerIds.push(booking.cleaner_id)
+    if (cleanerIds.length >= limit) break
+  }
+
+  const cards = await Promise.all(cleanerIds.map((id) => cardFor(id)))
+  return cards.filter((card): card is CleanerCardOut => card !== null)
+}
+
+/** Build a directory card for one cleaner id, or null if they no longer exist. */
+async function cardFor(cleanerId: string): Promise<CleanerCardOut | null> {
+  const doc = await cleanerRepo.findById(cleanerId)
+  if (!doc) return null
+
+  const [agg, bookingsCount, jobsDone] = await Promise.all([
+    reviewRepo.aggregateForCleaner(cleanerId),
+    bookingRepo.countForCleaner(cleanerId),
+    bookingRepo.countForCleaner(cleanerId, 'COMPLETED'),
+  ])
+
+  return CleanerCardOut.parse({
+    id: cleanerId,
+    name: `${doc.firstName} ${doc.lastName}`.trim(),
+    rating: agg.average,
+    jobsDone,
+    hourlyRate: null,
+    isVerified: doc.onboardingStatus === 'APPROVED',
+    avatarUrl: null,
+    roleLabel: 'Cleaner',
+    yearsExperience: null,
+    bookingsCount,
+    heroImageUrl: null,
+  })
+}
+
 /** Public profile for one cleaner, with a short review preview. */
 export async function getPublicProfile(cleanerId: string): Promise<CleanerPublicProfileOut> {
   const doc = await cleanerRepo.findById(cleanerId)

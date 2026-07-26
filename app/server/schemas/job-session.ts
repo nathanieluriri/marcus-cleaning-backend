@@ -25,8 +25,94 @@ export const ChecklistTask = z
   .openapi('ChecklistTask')
 export type ChecklistTask = z.infer<typeof ChecklistTask>
 
-export const JobSessionStatus = z.enum(['IN_PROGRESS', 'COMPLETED'])
+export const JobSessionStatus = z.enum(['EN_ROUTE', 'IN_PROGRESS', 'COMPLETED'])
 export type JobSessionStatus = z.infer<typeof JobSessionStatus>
+
+/**
+ * Customer-visible progress for a booking — the "your cleaner is on the way"
+ * bar. Derived from the booking status plus the job session, and exposed on
+ * BookingOut so the customer app never has to read a cleaner-side resource.
+ *
+ * SCHEDULED  booking accepted, cleaner has not set off
+ * EN_ROUTE   cleaner tapped "on my way"; `etaAt` may be present
+ * IN_PROGRESS cleaner has started; `startedAt` is authoritative
+ * COMPLETED  job finished
+ */
+export const BookingProgressState = z.enum([
+  'PENDING',
+  'SCHEDULED',
+  'EN_ROUTE',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'CANCELLED',
+])
+export type BookingProgressState = z.infer<typeof BookingProgressState>
+
+export const BookingProgressOut = z
+  .object({
+    bookingId: z.string(),
+    state: BookingProgressState,
+    /** 0-100, for the progress bar. Derived; do not compute client-side. */
+    percent: z.number().int().min(0).max(100),
+    /** Authoritative job start, unix epoch seconds. Null before the job starts. */
+    startedAt: z.number().int().nullable().default(null),
+    enRouteAt: z.number().int().nullable().default(null),
+    /** Cleaner's estimated arrival, unix epoch seconds, when they provided one. */
+    etaAt: z.number().int().nullable().default(null),
+    completedAt: z.number().int().nullable().default(null),
+    /** Elapsed working time so far, seconds. 0 before the job starts. */
+    elapsedSeconds: z.number().int().default(0),
+    /** Checklist progress, so the customer sees real movement. */
+    tasksCompleted: z.number().int().default(0),
+    tasksTotal: z.number().int().default(0),
+    cleanerName: z.string().nullable().default(null),
+    cleanerAvatarUrl: z.string().nullable().default(null),
+    /** Recommended poll interval, seconds, while this screen is open. */
+    pollIntervalSeconds: z.number().int().default(20),
+  })
+  .openapi('BookingProgressOut')
+export type BookingProgressOut = z.infer<typeof BookingProgressOut>
+
+/** Percentage shown on the customer's progress bar for each state. */
+const PROGRESS_PERCENT: Record<BookingProgressState, number> = {
+  PENDING: 0,
+  SCHEDULED: 10,
+  EN_ROUTE: 35,
+  IN_PROGRESS: 65,
+  COMPLETED: 100,
+  CANCELLED: 0,
+}
+
+/**
+ * Derive the customer-facing state from the booking status and job session.
+ * Pure — the single place this mapping is defined.
+ */
+export function deriveProgressState(args: {
+  bookingStatus: 'PENDING' | 'ACCEPTED' | 'COMPLETED' | 'ACKNOWLEDGED' | 'CANCELLED'
+  sessionStatus?: JobSessionStatus | null
+}): { state: BookingProgressState; percent: number } {
+  let state: BookingProgressState
+  if (args.bookingStatus === 'CANCELLED') state = 'CANCELLED'
+  else if (args.bookingStatus === 'COMPLETED' || args.bookingStatus === 'ACKNOWLEDGED') state = 'COMPLETED'
+  else if (args.sessionStatus === 'COMPLETED') state = 'COMPLETED'
+  else if (args.sessionStatus === 'IN_PROGRESS') state = 'IN_PROGRESS'
+  else if (args.sessionStatus === 'EN_ROUTE') state = 'EN_ROUTE'
+  else if (args.bookingStatus === 'ACCEPTED') state = 'SCHEDULED'
+  else state = 'PENDING'
+
+  return { state, percent: PROGRESS_PERCENT[state] }
+}
+
+/** Cleaner declares they are on the way, optionally with an ETA. */
+export const EnRouteRequest = z
+  .object({
+    /** Estimated arrival, unix epoch seconds. */
+    etaAt: z.number().int().nullable().optional(),
+    /** Alternative to `etaAt`: minutes from now. */
+    etaMinutes: z.number().int().min(0).max(600).nullable().optional(),
+  })
+  .openapi('EnRouteRequest')
+export type EnRouteRequest = z.infer<typeof EnRouteRequest>
 
 export const JobSessionOut = z
   .object({
@@ -34,7 +120,14 @@ export const JobSessionOut = z
     bookingId: z.string(),
     cleanerId: z.string(),
     status: JobSessionStatus,
-    /** Authoritative start, unix epoch seconds. Set by the server, not the app. */
+    /** Set when the cleaner declared they were on the way. */
+    enRouteAt: z.number().int().nullable().default(null),
+    /** Cleaner's estimated arrival, unix epoch seconds. */
+    etaAt: z.number().int().nullable().default(null),
+    /**
+     * Authoritative work start, unix epoch seconds. Set by the server, not the
+     * app. Zero while the session is only EN_ROUTE (work has not begun).
+     */
     startedAt: z.number().int(),
     completedAt: z.number().int().nullable().default(null),
     /** Derived: completedAt (or now) minus startedAt, in seconds. */
@@ -112,6 +205,8 @@ export interface JobSessionDoc {
   bookingId: string
   cleanerId: string
   status: JobSessionStatus
+  enRouteAt?: number | null
+  etaAt?: number | null
   startedAt: number
   completedAt?: number | null
   checklist: ChecklistTask[]
@@ -137,7 +232,14 @@ export interface SosAlertDoc {
   lastUpdated: number
 }
 
-/** Derive the elapsed duration for a session. Never read from the client. */
-export function durationOf(session: { startedAt: number; completedAt?: number | null }, now: number): number {
+/**
+ * Derive the elapsed WORKING duration. Never read from the client.
+ * `startedAt` of 0 means the cleaner is only en route — no work time yet.
+ */
+export function durationOf(
+  session: { startedAt: number; completedAt?: number | null },
+  now: number,
+): number {
+  if (!session.startedAt) return 0
   return Math.max(0, (session.completedAt ?? now) - session.startedAt)
 }

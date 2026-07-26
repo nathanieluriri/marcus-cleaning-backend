@@ -8,6 +8,7 @@ import { notify, notifyBookingParties } from '@/server/services/notification-dis
 import * as bookingRepo from '@/server/repositories/booking-repo'
 import * as sessionRepo from '@/server/repositories/job-session-repo'
 import * as cleanerRepo from '@/server/repositories/cleaner-repo'
+import type { BookingOut } from '@/server/schemas/booking'
 import type {
   ChecklistTask,
   JobCompletionOut,
@@ -38,6 +39,77 @@ export function splitPayout(gross: number, commissionPercent: number): { earning
 }
 
 /**
+ * Cleaner declares they are on the way. This is what lights up the customer's
+ * "your cleaner is on the way" bar, so it exists as its own step rather than
+ * being inferred from the job start.
+ */
+export async function markEnRoute(args: {
+  principal: AuthPrincipal
+  bookingId: string
+  etaAt?: number | null
+  etaMinutes?: number | null
+}): Promise<JobSessionOut> {
+  const booking = await loadCleanerBooking(args.principal, args.bookingId)
+  if (booking.status !== 'ACCEPTED') {
+    throw badRequest(`Only an accepted job can be started (current status: ${booking.status})`, {
+      status: booking.status,
+    })
+  }
+
+  const now = nowEpoch()
+  const etaAt = args.etaAt ?? (args.etaMinutes != null ? now + args.etaMinutes * 60 : null)
+
+  const existing = await sessionRepo.getByBookingId(booking.id, now)
+  if (existing) {
+    if (existing.status === 'COMPLETED') throw badRequest('This job is already completed')
+    // Already started or already en route — just refresh the ETA.
+    const updated = await sessionRepo.updateSession(
+      booking.id,
+      { etaAt, enRouteAt: existing.enRouteAt ?? now },
+      now,
+    )
+    await notifyEnRoute(booking, etaAt)
+    return updated!
+  }
+
+  // startedAt stays 0 until work actually begins, so the working timer and the
+  // travel phase never get conflated.
+  const checklist = await buildChecklist({ serviceId: booking.serviceId, addons: booking.addons })
+  const session = await sessionRepo.startSession(
+    {
+      bookingId: booking.id,
+      cleanerId: args.principal.userId,
+      status: 'EN_ROUTE',
+      enRouteAt: now,
+      etaAt,
+      startedAt: 0,
+      completedAt: null,
+      checklist,
+      payout: null,
+      currency: booking.currency ?? null,
+      dateCreated: now,
+      lastUpdated: now,
+    },
+    now,
+  )
+
+  await notifyEnRoute(booking, etaAt)
+  return session
+}
+
+async function notifyEnRoute(booking: BookingOut, etaAt: number | null): Promise<void> {
+  const when = etaAt ? ` Estimated arrival in about ${Math.max(1, Math.round((etaAt - nowEpoch()) / 60))} minutes.` : ''
+  await notifyBookingParties({
+    booking,
+    actorRole: 'cleaner',
+    title: 'Your cleaner is on the way',
+    body: `Your cleaner is heading to your address.${when}`,
+    type: 'job.en_route',
+    data: etaAt ? { etaAt } : undefined,
+  })
+}
+
+/**
  * Start the job. Idempotent by construction: a repeat call returns the existing
  * session with its original `startedAt`, so a crash-and-relaunch resumes the
  * same timer rather than restarting it.
@@ -55,6 +127,17 @@ export async function startJob(args: {
 
   const now = nowEpoch()
   const existing = await sessionRepo.getByBookingId(booking.id, now)
+  // An EN_ROUTE session exists but work has not begun — promote it in place so
+  // the same session carries the whole lifecycle.
+  if (existing && existing.status === 'EN_ROUTE') {
+    const promoted = await sessionRepo.updateSession(
+      booking.id,
+      { status: 'IN_PROGRESS', startedAt: now },
+      now,
+    )
+    await notifyStarted(booking)
+    return promoted!
+  }
   if (existing) return existing
 
   const checklist = await buildChecklist({ serviceId: booking.serviceId, addons: booking.addons })
@@ -63,6 +146,8 @@ export async function startJob(args: {
       bookingId: booking.id,
       cleanerId: args.principal.userId,
       status: 'IN_PROGRESS',
+      enRouteAt: null,
+      etaAt: null,
       startedAt: now,
       completedAt: null,
       checklist,
@@ -74,6 +159,11 @@ export async function startJob(args: {
     now,
   )
 
+  await notifyStarted(booking)
+  return session
+}
+
+async function notifyStarted(booking: BookingOut): Promise<void> {
   await notifyBookingParties({
     booking,
     actorRole: 'cleaner',
@@ -81,8 +171,6 @@ export async function startJob(args: {
     body: 'Your cleaner has arrived and started the job.',
     type: 'job.started',
   })
-
-  return session
 }
 
 /** Read the current session (404 before the job is started). */
@@ -120,6 +208,7 @@ export async function toggleTask(args: {
   const session = await sessionRepo.getByBookingId(args.bookingId, now)
   if (!session) throw notFound('This job has not been started yet')
   if (session.status === 'COMPLETED') throw badRequest('This job is already completed')
+  if (session.status === 'EN_ROUTE') throw badRequest('Start the job before ticking tasks')
 
   const updated = await sessionRepo.setChecklistTask(args.bookingId, args.taskId, args.done, now)
   if (!updated) throw notFound('Checklist task not found')
@@ -141,6 +230,9 @@ export async function completeJob(args: {
 
   const existing = await sessionRepo.getByBookingId(booking.id, now)
   if (!existing) throw badRequest('Start the job before completing it')
+  if (existing.status === 'EN_ROUTE') {
+    throw badRequest('Start the job before completing it', { status: existing.status })
+  }
 
   if (existing.status === 'COMPLETED') {
     const counts = sessionRepo.countTasks(existing.checklist)

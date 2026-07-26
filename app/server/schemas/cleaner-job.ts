@@ -24,6 +24,35 @@ export const CleanerJobOut = z
   .openapi('CleanerJobOut')
 export type CleanerJobOut = z.infer<typeof CleanerJobOut>
 
+/**
+ * `GET /v1/cleaner/jobs` query.
+ *
+ * `scope` splits the Available Jobs tab from My Jobs:
+ *   available — unassigned pool jobs the cleaner could accept
+ *   assigned  — jobs already claimed by this cleaner
+ *   all       — both (the default, preserving the previous behaviour)
+ *
+ * Distance is only computable when the caller supplies coordinates OR has a
+ * service area configured; `radiusMiles` without either is ignored rather than
+ * silently returning nothing.
+ */
+export const CleanerJobListQuery = z
+  .object({
+    scope: z.enum(['available', 'assigned', 'all']).default('all'),
+    status: BookingStatus.optional(),
+    /** Caller's current position, used for distance + radius filtering. */
+    lat: z.coerce.number().min(-90).max(90).optional(),
+    lng: z.coerce.number().min(-180).max(180).optional(),
+    /** Only return jobs within this many miles of `lat`/`lng`. */
+    radiusMiles: z.coerce.number().min(0).max(200).optional(),
+    /** Restrict to jobs scheduled at/after this unix epoch. */
+    from: z.coerce.number().int().optional(),
+    to: z.coerce.number().int().optional(),
+    sort: z.enum(['schedule', 'distance']).default('schedule'),
+  })
+  .openapi('CleanerJobListQuery')
+export type CleanerJobListQuery = z.infer<typeof CleanerJobListQuery>
+
 export const CleanerJobDeclineRequest = z
   .object({ reason: z.string().nullable().optional() })
   .openapi('CleanerJobDeclineRequest')
