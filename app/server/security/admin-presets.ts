@@ -116,3 +116,25 @@ export function expandPreset(key: string | null | undefined): string[] {
   const preset = ADMIN_PRESETS[key]
   return preset ? [...preset.permissions] : []
 }
+
+export interface AccessPresetCatalogItem {
+  key: string
+  label: string
+  description: string
+  permissionCount: number
+}
+
+/** Catalog of every named preset for the `GET /admins/access-presets` endpoint. */
+export function listPresetsCatalog(): AccessPresetCatalogItem[] {
+  return Object.entries(ADMIN_PRESETS).map(([key, preset]) => ({
+    key,
+    label: preset.label,
+    description: preset.description,
+    permissionCount: preset.permissions.length,
+  }))
+}
+
+/** True when a permission list contains the wildcard (i.e. grants every permission). */
+export function hasWildcard(permissions: string[] | null | undefined): boolean {
+  return Array.isArray(permissions) && permissions.includes('*')
+}

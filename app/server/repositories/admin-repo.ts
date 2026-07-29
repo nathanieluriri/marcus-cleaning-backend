@@ -94,6 +94,31 @@ export async function countSuperAdmins(): Promise<number> {
   return collection().countDocuments({ isSuperAdmin: true })
 }
 
+/**
+ * Count admins whose effective permissions include the wildcard `'*'`
+ * (i.e. `isSuperAdmin: true` or `permissionList` containing `'*'`, which is
+ * what the `all_controls` preset expands to). Used to block changing the
+ * preset of the *last* such admin — the "last-star" protection.
+ */
+export async function countAdminsWithStar(): Promise<number> {
+  await ensureIndexes()
+  return collection().countDocuments({
+    $or: [{ isSuperAdmin: true }, { permissionList: '*' }],
+  })
+}
+
+/** List admins whose stored `accessPreset` equals the given preset key. */
+export async function listByAccessPreset(preset: string): Promise<WithId<AdminDoc>[]> {
+  await ensureIndexes()
+  return collection().find({ accessPreset: preset }).toArray()
+}
+
+/** Count admins whose stored `accessPreset` equals the given preset key. */
+export async function countByAccessPreset(preset: string): Promise<number> {
+  await ensureIndexes()
+  return collection().countDocuments({ accessPreset: preset })
+}
+
 export function toAdminOut(doc: unknown): AdminOutType {
   const plain = fromDoc(doc) as Record<string, unknown>
   const totpEnabledAt = plain.totpEnabledAt

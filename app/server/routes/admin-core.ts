@@ -27,6 +27,10 @@ import {
   EventIdParam,
   AdminIdParam,
   AdminInviteRequest,
+  AccessPresetUpdate,
+  AccessPresetBulkUpdate,
+  AccessPresetBulkResult,
+  AccessPresetCatalogOut,
 } from '@/server/schemas/admin-core'
 import { AdminOut } from '@/server/schemas/admin'
 import * as access from '@/server/services/admin-access-service'
@@ -87,6 +91,9 @@ const GUARDED = [
   '/signup',
   '/invites',
   '/invites/:admin_id/resend',
+  '/access-presets',
+  '/access-presets/bulk',
+  '/:admin_id/access-preset',
   '/monitoring/overview',
   '/monitoring/auth/heatmap',
   '/monitoring/permissions/denied-top',
@@ -488,6 +495,52 @@ adminCore.openapi(
     const { admin_id } = c.req.valid('param')
     const updated = await invites.resend(admin_id)
     return c.json(ok(c, 'Invite resent', updated), 200)
+  },
+)
+
+// ============================ access presets ============================
+
+adminCore.openapi(
+  createRoute({ method: 'get', path: '/access-presets', tags: [TAG], security: [{ bearerAuth: [] }], responses: jsonOk(AccessPresetCatalogOut) }),
+  async (c) => {
+    principalOf(c)
+    const items = mgmt.listAccessPresets()
+    return c.json(ok(c, 'Access presets', { items }), 200)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/access-presets/bulk',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: AccessPresetBulkUpdate } } } },
+    responses: jsonOk(AccessPresetBulkResult),
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { adminIds, preset } = c.req.valid('json')
+    const r = await mgmt.bulkSetAccessPreset({ callerId: p.userId, adminIds, preset })
+    return c.json(ok(c, 'Access presets updated', r), 200)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'patch',
+    path: '/{admin_id}/access-preset',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: AdminIdParam, body: { content: { 'application/json': { schema: AccessPresetUpdate } } } },
+    responses: jsonOk(AdminOut),
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { admin_id } = c.req.valid('param')
+    const { preset } = c.req.valid('json')
+    const r = await mgmt.setAccessPreset({ callerId: p.userId, targetId: admin_id, preset })
+    return c.json(ok(c, 'Access preset updated', r), 200)
   },
 )
 
