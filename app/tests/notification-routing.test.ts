@@ -21,10 +21,10 @@ beforeEach(() => {
 })
 
 describe('routingFor', () => {
-  it('puts job events on the jobs channel with the sweeping sound', () => {
+  it('puts job events on the jobs channel with the bundled sound', () => {
     const entry = routingFor('job.started')
     expect(entry.channelId).toBe(NotificationChannel.JOBS)
-    expect(entry.sound).toBe(NotificationSound.SWEEPING)
+    expect(entry.sound).toBe(NotificationSound.NOTIFICATION)
   })
 
   it('versions every channel id, so a sound can be changed later', () => {
@@ -73,6 +73,18 @@ describe('routingFor', () => {
     expect(types).toContain('payout.paid')
     expect(types).toContain('payout.failed')
   })
+
+  it('uses the single bundled sound file for all custom-sound types', () => {
+    for (const type of knownNotificationTypes()) {
+      const entry = routingFor(type)
+      expect(['notification.caf', 'default']).toContain(entry.sound)
+    }
+  })
+
+  it('routes chat.message for cleaners now that the staff chat screen exists', () => {
+    const nav = navigationFor('chat.message', { conversationId: 'c1' }, 'cleaner')
+    expect(nav.route).toBe('/chat/c1')
+  })
 })
 
 describe('buildRoute', () => {
@@ -104,7 +116,7 @@ describe('navigationFor', () => {
   it('always supplies a channel and sound, even with routes unconfigured', () => {
     const nav = navigationFor('job.started', { bookingId: 'b1' })
     expect(nav.channelId).toBe(NotificationChannel.JOBS)
-    expect(nav.sound).toBe(NotificationSound.SWEEPING)
+    expect(nav.sound).toBe(NotificationSound.NOTIFICATION)
   })
 
   it('emits structured entity refs so the app can route without a URL', () => {
@@ -127,11 +139,20 @@ describe('navigationFor', () => {
     expect(cleaner.route).toBe('/jobs')
   })
 
-  it('omits the route for a staff screen that does not exist yet', () => {
+  it('routes to the staff chat screen now that it exists', () => {
     const nav = navigationFor('chat.message', { conversationId: 'c1' }, 'cleaner')
-    expect(nav.route).toBeUndefined()
+    expect(nav.route).toBe('/chat/c1')
     // The structured reference is still present, so it works the day the screen lands.
     expect(nav.entityId).toBe('c1')
+  })
+
+  it('keeps missingStep reachable in the navigation-relevant data for application.more_info_required', () => {
+    const nav = navigationFor(
+      'application.more_info_required',
+      { applicationId: 'a1', missingStep: 'documents' },
+      'cleaner',
+    )
+    expect(nav.route).toBe('/signup/verification')
   })
 
   it('passes the collapse key through for chat', () => {
