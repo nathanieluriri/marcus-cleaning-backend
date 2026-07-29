@@ -7,6 +7,8 @@ import { SavedAddressOut, SavedAddressCreate, SavedAddressUpdate } from '@/serve
 import * as savedAddressService from '@/server/services/saved-address-service'
 import * as settingsService from '@/server/services/customer-settings-service'
 import * as sessionRepo from '@/server/repositories/session-repo'
+import * as favoritesService from '@/server/services/favorites-service'
+import { CleanerCardOut } from '@/server/schemas/cleaner-directory'
 
 /**
  * /v1/customers — profile / addresses / settings / language slice.
@@ -58,6 +60,9 @@ const SettingsData = z.record(z.string(), z.unknown()).openapi('CustomerSettings
 const DeletedData = z.object({ deleted: z.boolean() }).openapi('CustomerAddressDeleted')
 const RevokedData = z.object({ revoked: z.number().int() }).openapi('CustomerSessionRevoked')
 const AddressListData = z.array(SavedAddressOut).openapi('SavedAddressList')
+const FavoritesListData = z.array(CleanerCardOut).openapi('FavoriteCleanerList')
+const FavoritedData = z.object({ favorited: z.boolean() }).openapi('FavoritedResult')
+const cleanerIdParam = z.object({ cleaner_id: z.string().openapi({ param: { name: 'cleaner_id', in: 'path' } }) })
 
 // --- guards: every route in this slice is customer-authenticated ---
 customerExtras.use('/me', requireCustomer())
@@ -406,6 +411,68 @@ customerExtras.openapi(
     const { session_id } = c.req.valid('param')
     const revoked = await sessionRepo.revokeSession(p.userId, session_id, new Date())
     return c.json(ok(c, 'Session revoked successfully', { revoked }), 200)
+  },
+)
+
+// =====================================================================
+// Favorites  (GET /me/favorites, PUT/DELETE /me/favorites/{cleaner_id})
+// =====================================================================
+customerExtras.openapi(
+  createRoute({
+    method: 'get',
+    path: '/me/favorites',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Favorite cleaners', content: { 'application/json': { schema: envelopeOf(FavoritesListData) } } },
+      ...authErr,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const favorites = await favoritesService.list(p.userId)
+    return c.json(ok(c, 'Favorites retrieved successfully', favorites), 200)
+  },
+)
+
+customerExtras.openapi(
+  createRoute({
+    method: 'put',
+    path: '/me/favorites/{cleaner_id}',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: cleanerIdParam },
+    responses: {
+      200: { description: 'Cleaner favorited', content: { 'application/json': { schema: envelopeOf(FavoritedData) } } },
+      ...authErr,
+      ...notFoundErr,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { cleaner_id } = c.req.valid('param')
+    await favoritesService.add(p.userId, cleaner_id)
+    return c.json(ok(c, 'Cleaner favorited successfully', { favorited: true }), 200)
+  },
+)
+
+customerExtras.openapi(
+  createRoute({
+    method: 'delete',
+    path: '/me/favorites/{cleaner_id}',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: cleanerIdParam },
+    responses: {
+      200: { description: 'Cleaner unfavorited', content: { 'application/json': { schema: envelopeOf(FavoritedData) } } },
+      ...authErr,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { cleaner_id } = c.req.valid('param')
+    await favoritesService.remove(p.userId, cleaner_id)
+    return c.json(ok(c, 'Cleaner unfavorited successfully', { favorited: false }), 200)
   },
 )
 

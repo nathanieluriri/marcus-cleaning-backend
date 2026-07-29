@@ -108,7 +108,7 @@ export async function listRecentlyBooked(
 }
 
 /** Build a directory card for one cleaner id, or null if they no longer exist. */
-async function cardFor(cleanerId: string): Promise<CleanerCardOut | null> {
+export async function cardFor(cleanerId: string): Promise<CleanerCardOut | null> {
   const doc = await cleanerRepo.findById(cleanerId)
   if (!doc) return null
 
