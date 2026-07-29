@@ -126,6 +126,8 @@ const EnvSchema = z
     /** Dev-only OTP bypass code. Boot refuses to start if this is set in production. */
     OTP_DEV_CODE: z.string().optional(),
     ADMIN_COOKIE_DOMAIN: z.string().optional(),
+    /** Login URL embedded in admin invite emails. Falls back to the first CORS origin, then localhost. */
+    ADMIN_LOGIN_URL: z.string().optional(),
 
     // per-role session policy (carried over from FastAPI)
     AUTH_SESSION_MAX_AGE_ADMIN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 12),

@@ -83,6 +83,16 @@ export const AdminCreateSignup = z
   .openapi('AdminCreateSignup')
 export type AdminCreateSignup = z.infer<typeof AdminCreateSignup>
 
+// --- invites ---
+export const AdminInviteRequest = z
+  .object({
+    email: z.email(),
+    fullName: z.string().min(1),
+    accessPreset: z.string().min(1),
+  })
+  .openapi('AdminInviteRequest')
+export type AdminInviteRequest = z.infer<typeof AdminInviteRequest>
+
 // --- audit export ---
 export const AuditExportRequest = z
   .object({

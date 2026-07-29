@@ -26,6 +26,7 @@ import {
   ExportIdParam,
   EventIdParam,
   AdminIdParam,
+  AdminInviteRequest,
 } from '@/server/schemas/admin-core'
 import { AdminOut } from '@/server/schemas/admin'
 import * as access from '@/server/services/admin-access-service'
@@ -35,6 +36,7 @@ import * as directory from '@/server/services/admin-directory-service'
 import * as monitoring from '@/server/services/admin-monitoring-service'
 import * as reporting from '@/server/services/admin-reporting-service'
 import * as mgmt from '@/server/services/admin-management-service'
+import * as invites from '@/server/services/admin-invite-service'
 
 /**
  * /v1/admins — core admin endpoints that are NOT auth (auth lives in admins.ts).
@@ -83,6 +85,8 @@ const GUARDED = [
   '/cleaners/:cleaner_id',
   '/users/autocomplete',
   '/signup',
+  '/invites',
+  '/invites/:admin_id/resend',
   '/monitoring/overview',
   '/monitoring/auth/heatmap',
   '/monitoring/permissions/denied-top',
@@ -441,6 +445,49 @@ adminCore.openapi(
     principalOf(c)
     const created = await mgmt.signup(c.req.valid('json'))
     return c.json(ok(c, 'Admin created', created), 201)
+  },
+)
+
+// ============================ invites ============================
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/invites',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: AdminInviteRequest } } } },
+    responses: {
+      201: { description: 'Admin invited', content: { 'application/json': { schema: envelopeOf(AdminOut) } } },
+      409: { description: 'Email already exists', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...errs,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { email, fullName, accessPreset } = c.req.valid('json')
+    const created = await invites.invite({ email, fullName, accessPreset, invitedBy: p.userId })
+    return c.json(ok(c, 'Admin invited', created), 201)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/invites/{admin_id}/resend',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: AdminIdParam },
+    responses: {
+      409: { description: 'Admin already activated', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...jsonOk(AdminOut),
+    },
+  }),
+  async (c) => {
+    principalOf(c)
+    const { admin_id } = c.req.valid('param')
+    const updated = await invites.resend(admin_id)
+    return c.json(ok(c, 'Invite resent', updated), 200)
   },
 )
 

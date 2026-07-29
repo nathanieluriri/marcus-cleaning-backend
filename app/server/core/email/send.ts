@@ -5,6 +5,7 @@ import { AppError } from '@/server/core/errors'
 import { OtpEmail } from '@/server/emails/otp'
 import { NewSignInEmail } from '@/server/emails/new-sign-in'
 import { InvitationEmail } from '@/server/emails/invitation'
+import { AdminInviteEmail } from '@/server/emails/admin-invite'
 import { RevokeEmail } from '@/server/emails/revoke'
 import { PasswordResetEmail } from '@/server/emails/password-reset'
 
@@ -85,6 +86,25 @@ export async function sendInvitationEmail(args: {
       invitedByName: args.invitedByName ?? null,
     }),
     idempotencyKey: `invitation/${args.to}/${args.inviteUrl}`,
+  })
+}
+
+export async function sendAdminInviteEmail(args: {
+  to: string
+  tempPassword: string
+  loginUrl: string
+  invitedByName?: string | null
+}) {
+  return dispatch({
+    to: args.to,
+    subject: 'You have been invited to Marcus Cleaning',
+    react: AdminInviteEmail({
+      inviteeEmail: args.to,
+      tempPassword: args.tempPassword,
+      loginUrl: args.loginUrl,
+      invitedByName: args.invitedByName ?? null,
+    }),
+    idempotencyKey: `admin-invite/${args.to}/${args.tempPassword}`,
   })
 }
 
