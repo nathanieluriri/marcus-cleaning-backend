@@ -40,6 +40,21 @@ export const AdminOut = z
   .openapi('AdminOut')
 export type AdminOut = z.infer<typeof AdminOut>
 
+/** `POST /admins/login` response when `ADMIN_OTP_REQUIRED` is true: no tokens, no profile — just enough to drive the OTP step. */
+export const AdminLoginChallengeData = z
+  .object({
+    otpRequired: z.literal(true),
+    otpChallengeId: z.string(),
+    method: z.enum(['email', 'totp']),
+  })
+  .openapi('AdminLoginChallengeData')
+export type AdminLoginChallengeData = z.infer<typeof AdminLoginChallengeData>
+
+export const AdminVerifyOtpRequest = z
+  .object({ challengeId: z.string().min(1), code: z.string().min(1) })
+  .openapi('AdminVerifyOtpRequest')
+export type AdminVerifyOtpRequest = z.infer<typeof AdminVerifyOtpRequest>
+
 export interface AdminDoc {
   firstName: string
   lastName: string

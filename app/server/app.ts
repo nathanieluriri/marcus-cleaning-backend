@@ -2,6 +2,7 @@ import { cors } from 'hono/cors'
 import { requestId } from 'hono/request-id'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { getSettings, isProduction } from './core/settings'
+import { assertProductionPosture } from './core/security-posture'
 import { fail } from './core/envelope'
 import { AppError } from './core/errors'
 import { translate, locale } from './core/i18n'
@@ -50,6 +51,10 @@ function allowedOrigins(): string[] {
   if (!raw) return ['http://localhost:3000']
   return raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
+
+// Refuse to boot with an unsafe combination of settings (e.g. OTP_DEV_CODE
+// left set in production). Runs once at module init, before any request.
+assertProductionPosture()
 
 export const app = createRouter()
 
