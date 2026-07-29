@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
-import { requireCustomer, principalOf } from '@/server/security/guards'
+import { requireCustomerOrCleaner, principalOf } from '@/server/security/guards'
 import { getSettings } from '@/server/core/settings'
 import { notFound } from '@/server/core/errors'
 import {
@@ -15,7 +15,9 @@ import { readLocalObject, writeLocalObject } from '@/server/core/storage/local'
 
 /**
  * /v1/documents — presigned upload intents + document metadata.
- * Mounted under /api/v1/documents (see server/app.ts). Customer-guarded.
+ * Mounted under /api/v1/documents (see server/app.ts). Guarded for both
+ * customers and cleaners — cleaners upload application documents via
+ * routes/cleaner-applications.ts, which attaches document ids created here.
  * The /upload-local and /local helpers are plain hidden routes (dev-only,
  * not in OpenAPI) used by the `local` storage backend.
  * See: docs/migration/07-domain-endpoints.md (/v1/documents)
@@ -34,10 +36,10 @@ const authErrs = {
   422: { description: 'Validation error', content: { 'application/json': { schema: ErrorEnvelope } } },
 }
 
-// --- customer-guarded routes -------------------------------------------------
-documents.use('/upload-intents', requireCustomer())
-documents.use('/complete', requireCustomer())
-documents.use('/:document_id', requireCustomer())
+// --- customer/cleaner-guarded routes -----------------------------------------
+documents.use('/upload-intents', requireCustomerOrCleaner())
+documents.use('/complete', requireCustomerOrCleaner())
+documents.use('/:document_id', requireCustomerOrCleaner())
 
 // POST /upload-intents
 documents.openapi(
