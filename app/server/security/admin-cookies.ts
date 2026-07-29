@@ -10,6 +10,13 @@ import { getSettings } from '@/server/core/settings'
 
 export const ADMIN_ACCESS_COOKIE = 'admin_access'
 export const ADMIN_REFRESH_COOKIE = 'admin_refresh'
+// Deliberately '/api/v1', NOT '/api/v1/admins': the access cookie also has to
+// reach `/api/v1/banners/*` (bannerPermissionGuard, see
+// security/admin-permission-guard.ts) and any other non-/admins admin-guarded
+// surface that authenticates via `accessTokenFrom(..., 'admin')`'s cookie
+// fallback. Scoping it to '/api/v1/admins' would silently break those routes
+// for the admin web frontend, which never sends a bearer header. The refresh
+// cookie stays tightly scoped to the one endpoint that reads it.
 export const ADMIN_ACCESS_COOKIE_PATH = '/api/v1'
 export const ADMIN_REFRESH_COOKIE_PATH = '/api/v1/admins/refresh'
 

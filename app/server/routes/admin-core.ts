@@ -41,6 +41,7 @@ import * as monitoring from '@/server/services/admin-monitoring-service'
 import * as reporting from '@/server/services/admin-reporting-service'
 import * as mgmt from '@/server/services/admin-management-service'
 import * as invites from '@/server/services/admin-invite-service'
+import * as adminRepo from '@/server/repositories/admin-repo'
 
 /**
  * /v1/admins — core admin endpoints that are NOT auth (auth lives in admins.ts).
@@ -440,6 +441,8 @@ adminCore.openapi(
     method: 'post',
     path: '/signup',
     tags: [TAG],
+    deprecated: true,
+    description: 'Deprecated — use POST /admins/invites instead. Directly creates an admin with a caller-supplied password; the invite flow issues a temp password and forces a change on first login.',
     security: [{ bearerAuth: [] }],
     request: { body: { content: { 'application/json': { schema: AdminCreateSignup } } } },
     responses: {
@@ -473,7 +476,12 @@ adminCore.openapi(
   async (c) => {
     const p = principalOf(c)
     const { email, fullName, accessPreset } = c.req.valid('json')
-    const created = await invites.invite({ email, fullName, accessPreset, invitedBy: p.userId })
+    // Resolve the caller's display name (not their ObjectId) for the
+    // "invited by" line in the invite email — findById returns null only in
+    // pathological cases (deleted mid-request), so fall back to no name.
+    const caller = await adminRepo.findById(p.userId)
+    const invitedByName = caller ? `${caller.firstName} ${caller.lastName}`.trim() : null
+    const created = await invites.invite({ email, fullName, accessPreset, invitedBy: invitedByName })
     return c.json(ok(c, 'Admin invited', created), 201)
   },
 )

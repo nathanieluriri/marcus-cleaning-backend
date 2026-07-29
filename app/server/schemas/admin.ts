@@ -67,6 +67,17 @@ export const TotpSetupData = z
   .openapi('TotpSetupData')
 export type TotpSetupData = z.infer<typeof TotpSetupData>
 
+/**
+ * `POST /admins/2fa/setup` request. `code` is required for RE-enrollment (an
+ * admin who already has `totpEnabledAt` set) — proves control of the current
+ * factor (live TOTP or a backup code) before a new pending secret can be
+ * issued. Omit entirely for fresh (first-time) enrollment.
+ */
+export const TotpSetupRequest = z
+  .object({ code: z.string().min(1).optional() })
+  .openapi('TotpSetupRequest')
+export type TotpSetupRequest = z.infer<typeof TotpSetupRequest>
+
 export const TotpVerifyRequest = z.object({ code: z.string().min(1) }).openapi('TotpVerifyRequest')
 export type TotpVerifyRequest = z.infer<typeof TotpVerifyRequest>
 

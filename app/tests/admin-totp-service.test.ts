@@ -47,12 +47,45 @@ beforeEach(() => {
 })
 
 describe('setup', () => {
-  it('stores a pending secret and returns it with an otpauth URI', async () => {
+  it('fresh enrollment (no TOTP ever enabled) needs no code', async () => {
     const admin = seedAdmin()
     const result = await totpService.setup(admin._id)
     expect(result.secret).toMatch(/^[A-Z2-7]+$/)
     expect(result.otpauthUri).toContain(encodeURIComponent(`Marcus Cleaning Admin:${admin.email}`))
     expect(adminsStore.get(admin._id)?.totpPendingSecret).toBe(result.secret)
+  })
+
+  it('re-enrollment (TOTP already enabled) with no code is rejected', async () => {
+    const secret = 'JBSWY3DPEHPK3PXP'
+    const admin = seedAdmin({ totpSecret: secret, totpEnabledAt: 1 })
+    await expect(totpService.setup(admin._id)).rejects.toMatchObject({ code: 'TOTP_INVALID', httpStatus: 401 })
+    // pending secret must not have been touched
+    expect(adminsStore.get(admin._id)?.totpPendingSecret ?? null).toBeNull()
+  })
+
+  it('re-enrollment with a wrong code is rejected', async () => {
+    const secret = 'JBSWY3DPEHPK3PXP'
+    const admin = seedAdmin({ totpSecret: secret, totpEnabledAt: 1 })
+    await expect(totpService.setup(admin._id, '000000')).rejects.toMatchObject({ code: 'TOTP_INVALID', httpStatus: 401 })
+    expect(adminsStore.get(admin._id)?.totpPendingSecret ?? null).toBeNull()
+  })
+
+  it('re-enrollment with the current live TOTP code is accepted and issues a new pending secret', async () => {
+    const secret = 'JBSWY3DPEHPK3PXP'
+    const admin = seedAdmin({ totpSecret: secret, totpEnabledAt: 1 })
+    const result = await totpService.setup(admin._id, totpCode(secret))
+    expect(result.secret).toMatch(/^[A-Z2-7]+$/)
+    expect(result.secret).not.toBe(secret) // fresh pending secret, not the live one
+    expect(adminsStore.get(admin._id)?.totpPendingSecret).toBe(result.secret)
+    expect(adminsStore.get(admin._id)?.totpSecret).toBe(secret) // live secret untouched until /verify
+  })
+
+  it('re-enrollment with a valid unused backup code is accepted (and consumes it)', async () => {
+    const plain = 'ABCDEFGH12'
+    const admin = seedAdmin({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabledAt: 1, backupCodes: [sha256(plain)] })
+    const result = await totpService.setup(admin._id, plain)
+    expect(adminsStore.get(admin._id)?.totpPendingSecret).toBe(result.secret)
+    expect(adminsStore.get(admin._id)?.backupCodes).toEqual([])
   })
 })
 

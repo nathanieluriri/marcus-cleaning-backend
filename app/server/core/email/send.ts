@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { getResend } from './resend'
 import { getSettings } from '@/server/core/settings'
 import { AppError } from '@/server/core/errors'
+import { sha256 } from '@/server/security/hash'
 import { OtpEmail } from '@/server/emails/otp'
 import { NewSignInEmail } from '@/server/emails/new-sign-in'
 import { InvitationEmail } from '@/server/emails/invitation'
@@ -104,7 +105,10 @@ export async function sendAdminInviteEmail(args: {
       loginUrl: args.loginUrl,
       invitedByName: args.invitedByName ?? null,
     }),
-    idempotencyKey: `admin-invite/${args.to}/${args.tempPassword}`,
+    // Hash, not raw: the temp password is a live credential — it must never
+    // leave this process in plaintext, including inside a Resend request
+    // header/log line.
+    idempotencyKey: `admin-invite/${args.to}/${sha256(args.tempPassword)}`,
   })
 }
 

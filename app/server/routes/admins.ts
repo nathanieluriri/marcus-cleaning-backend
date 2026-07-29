@@ -15,6 +15,7 @@ import {
   AdminVerifyOtpRequest,
   AdminChangePasswordRequest,
   TotpSetupData,
+  TotpSetupRequest,
   TotpVerifyRequest,
   TotpBackupCodesData,
   TotpDisableRequest,
@@ -167,15 +168,19 @@ admins.openapi(
     path: '/2fa/setup',
     tags: ['Admins'],
     security: [{ bearerAuth: [] }],
-    description: 'Begin (or restart) TOTP enrollment — stores a pending secret, returns it plus a QR-ready otpauth URI.',
+    description:
+      'Begin (or restart) TOTP enrollment — stores a pending secret, returns it plus a QR-ready otpauth URI. ' +
+      'RE-enrollment (TOTP already enabled) requires `code` — the current TOTP or a backup code — in the body.',
+    request: { body: { content: { 'application/json': { schema: TotpSetupRequest } }, required: false } },
     responses: {
       200: { description: 'Pending TOTP secret issued', content: { 'application/json': { schema: envelopeOf(TotpSetupData) } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorEnvelope } } },
+      401: { description: 'Unauthorized, or invalid re-enrollment proof', content: { 'application/json': { schema: ErrorEnvelope } } },
     },
   }),
   async (c) => {
     const p = principalOf(c)
-    const result = await adminTotpService.setup(p.userId)
+    const body = (await c.req.json().catch(() => ({}))) as { code?: string }
+    const result = await adminTotpService.setup(p.userId, body?.code)
     return c.json(ok(c, 'TOTP setup initiated', result), 200)
   },
 )

@@ -40,11 +40,11 @@ const OPERATIONS_PERMISSIONS = [
   'GET:/api/v1/admins/users/autocomplete',
 ]
 
-const SUPPORT_PERMISSIONS = [
-  'GET:/api/v1/faq',
-  'GET:/api/v1/conversations',
-  'GET:/api/v1/conversations/:conversation_id',
-]
+// NOTE: conversations reads (`GET /api/v1/conversations[...]`) were removed —
+// that router is `requireCustomer()`-guarded, so an admin's bearer token
+// (audience `admin`) can never actually reach it. A preset entry that no
+// enforcement layer can ever grant is dead weight, not a permission.
+const SUPPORT_PERMISSIONS = ['GET:/api/v1/faq']
 
 const CONTENT_PERMISSIONS = [
   'GET:/api/v1/banners',
@@ -56,9 +56,11 @@ const CONTENT_PERMISSIONS = [
   'POST:/api/v1/admins/broadcasts',
 ]
 
+// NOTE: `POST /api/v1/payments/:payment_id/refund` was removed — that router
+// is `requireCustomer()`-guarded, so an admin token can never reach it. See
+// the SUPPORT_PERMISSIONS note above for why this must not sit in a preset.
 const FINANCE_PERMISSIONS = [
   'GET:/api/v1/payments/:payment_id',
-  'POST:/api/v1/payments/:payment_id/refund',
   'GET:/api/v1/admins/service-credits',
   'POST:/api/v1/admins/service-credits/grant',
   'GET:/api/v1/admins/reports/users/summary',

@@ -11,6 +11,7 @@ import { adminCore } from '@/server/routes/admin-core'
 import { adminFeatures } from '@/server/routes/admin-features'
 import { adminSafety } from '@/server/routes/admin-safety'
 import { adminBroadcasts } from '@/server/routes/admin-broadcasts'
+import { banners } from '@/server/routes/banners'
 
 /**
  * Mount-level permission enforcement for every admin route (Task 7).
@@ -174,17 +175,17 @@ function segmentsMatch(patternSegs: string[], pathSegs: string[]): boolean {
 }
 
 /**
- * Resolve a concrete request (method + full path) to its catalog key.
- * Longest match wins: among candidates with the same segment count, the one
- * with the most literal (non-placeholder) segments. Returns null when no
- * catalog entry matches (callers fail closed).
+ * Resolve a concrete request (method + full path) to its catalog key, given
+ * a candidate key set. Longest match wins: among candidates with the same
+ * segment count, the one with the most literal (non-placeholder) segments.
+ * Returns null when no catalog entry matches (callers fail closed).
  */
-export function matchAdminRouteKey(method: string, path: string): string | null {
+function matchRouteKey(keys: string[], method: string, path: string): string | null {
   const m = method.toUpperCase()
   const pathSegs = trimTrailingSlash(path).split('/')
   let best: string | null = null
   let bestLiterals = -1
-  for (const key of getAdminRouteKeys()) {
+  for (const key of keys) {
     if (!key.startsWith(`${m}:`)) continue
     const patternSegs = key.slice(m.length + 1).split('/')
     if (!segmentsMatch(patternSegs, pathSegs)) continue
@@ -195,6 +196,16 @@ export function matchAdminRouteKey(method: string, path: string): string | null 
     }
   }
   return best
+}
+
+/**
+ * Resolve a concrete request (method + full path) to its catalog key.
+ * Longest match wins: among candidates with the same segment count, the one
+ * with the most literal (non-placeholder) segments. Returns null when no
+ * catalog entry matches (callers fail closed).
+ */
+export function matchAdminRouteKey(method: string, path: string): string | null {
+  return matchRouteKey(getAdminRouteKeys(), method, path)
 }
 
 /**
@@ -242,6 +253,104 @@ export function adminPermissionGuard() {
     if (!key) {
       // Fail closed: a request under the admin mount that matches no
       // catalogued route is forbidden, not 404.
+      throw new AppError(403, 'FORBIDDEN', 'Forbidden')
+    }
+    const wanted = normalizePermissionKey(key)
+    const granted = (admin.permissionList ?? []).map(normalizePermissionKey)
+    if (!granted.includes(wanted)) {
+      throw new AppError(403, 'FORBIDDEN', 'Forbidden', { required: key })
+    }
+    await next()
+  })
+}
+
+/**
+ * Banner write enforcement (final-review fix — banners authz gap).
+ *
+ * `/api/v1/banners/*` sits OUTSIDE the `/api/v1/admins/*` mount, so the
+ * enforcement above never sees it: the router's own `requireAdmin()` guard
+ * on writes only checks "is this an authenticated admin", not "does this
+ * admin's preset actually grant banner writes" — meaning any admin,
+ * including a `mustChangePassword`-locked one, could create/edit/delete
+ * banners. This mirrors the SAME permission + password-gate logic as
+ * `adminPermissionGuard`, scoped to banner WRITE methods only; GET stays
+ * fully public/customer-guarded (handled by `banners.ts` itself) and is
+ * never touched here.
+ */
+
+export const BANNERS_MOUNT = '/api/v1/banners'
+
+let cachedBannerKeys: string[] | null = null
+
+/**
+ * Every non-GET route registered on the banners router as a catalog key
+ * `METHOD:/api/v1/banners/<path with {param} placeholders>`. GET is
+ * deliberately excluded — list/get stay public and are never permission-gated.
+ */
+export function getBannerRouteKeys(): string[] {
+  if (!cachedBannerKeys) {
+    const seen = new Set<string>()
+    for (const route of banners.routes) {
+      const method = route.method.toUpperCase()
+      if (!METHODS.has(method) || method === 'GET') continue
+      const rel = route.path === '/' ? '' : route.path
+      seen.add(`${method}:${displayPath(BANNERS_MOUNT + rel)}`)
+    }
+    cachedBannerKeys = [...seen].sort()
+  }
+  return cachedBannerKeys
+}
+
+/** Test seam: rebuild the derived banner catalog. */
+export function __resetBannerRouteCatalog(): void {
+  cachedBannerKeys = null
+}
+
+/** Resolve a concrete banner-write request to its catalog key, or null if unmatched. */
+export function matchBannerRouteKey(method: string, path: string): string | null {
+  return matchRouteKey(getBannerRouteKeys(), method, path)
+}
+
+/**
+ * Mount-level enforcement for `/api/v1/banners/*`. GET requests pass through
+ * untouched (public/customer surface, guarded by `banners.ts`). Writes are
+ * authenticated with `requireAdmin` semantics and checked against the
+ * banner-write catalog, using the exact same `isSuperAdmin` / `'*'` /
+ * `mustChangePassword` rules as the admin mount so behaviour stays uniform.
+ */
+export function bannerPermissionGuard() {
+  return createMiddleware<Env>(async (c, next) => {
+    const method = c.req.method.toUpperCase()
+    if (method === 'OPTIONS' || method === 'GET') return next()
+
+    const path = trimTrailingSlash(c.req.path)
+    if (path !== BANNERS_MOUNT && !path.startsWith(`${BANNERS_MOUNT}/`)) return next()
+
+    // --- authenticate (requireAdmin semantics; loads the admin doc once) ---
+    const token = accessTokenFrom(c, 'admin')
+    const claims = await verifyAccessToken(token, ROLE_TO_AUDIENCE.admin)
+    if (claims.role !== 'admin') throw authRoleMismatch('admin', claims.role)
+    const admin = await adminRepo.findById(claims.sub)
+    if (!admin) throw authInvalidToken({ reason: 'Account not found' })
+
+    const principal: AuthPrincipal = {
+      userId: claims.sub,
+      role: claims.role,
+      audience: claims.audience,
+      sessionId: claims.sessionId,
+    }
+    c.set('principal', principal) // downstream requireAdmin() becomes a no-op
+
+    // --- mustChangePassword lockdown: a locked admin may not write banners ---
+    if (admin.mustChangePassword) {
+      throw new AppError(403, 'PASSWORD_CHANGE_REQUIRED', 'Password change required before using the admin API')
+    }
+
+    // --- permission check ---
+    if (admin.isSuperAdmin === true || hasWildcard(admin.permissionList)) return next()
+
+    const key = matchBannerRouteKey(method, path)
+    if (!key) {
       throw new AppError(403, 'FORBIDDEN', 'Forbidden')
     }
     const wanted = normalizePermissionKey(key)

@@ -19,10 +19,14 @@ import { adminCore } from '@/server/routes/admin-core'
 import { adminFeatures } from '@/server/routes/admin-features'
 import { adminSafety } from '@/server/routes/admin-safety'
 import { adminBroadcasts } from '@/server/routes/admin-broadcasts'
+import { banners } from '@/server/routes/banners'
 import {
   ADMIN_MOUNT,
+  BANNERS_MOUNT,
   getAdminRouteKeys,
+  getBannerRouteKeys,
   matchAdminRouteKey,
+  matchBannerRouteKey,
   isExemptAdminRoute,
   isImplicitSelfService,
 } from '@/server/security/admin-permission-guard'
@@ -89,5 +93,32 @@ describe('admin route coverage guardrail', () => {
     const customers = catalog.find((e) => e.key === 'GET:/api/v1/admins/customers')
     expect(customers?.label).toBe('View customers')
     expect(customers?.category).toBe('directory')
+  })
+})
+
+describe('banner write route coverage guardrail', () => {
+  const writeEndpoints: Array<{ method: string; path: string }> = []
+  for (const route of banners.routes) {
+    const method = route.method.toUpperCase()
+    if (!METHODS.has(method) || method === 'GET') continue
+    writeEndpoints.push({ method, path: route.path === '/' ? '' : route.path })
+  }
+
+  it('found the banner write routes (create/update/delete)', () => {
+    expect(writeEndpoints.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('every banner write route resolves to a catalog key via matchBannerRouteKey', () => {
+    const uncovered: string[] = []
+    for (const { method, path } of writeEndpoints) {
+      const rel = concretePath(path) || '/'
+      const full = BANNERS_MOUNT + rel
+      if (matchBannerRouteKey(method, full) === null) uncovered.push(`${method}:${path}`)
+    }
+    expect(uncovered).toEqual([])
+  })
+
+  it('GET /banners is never in the banner-write catalog (stays public)', () => {
+    expect(getBannerRouteKeys().some((k) => k.startsWith('GET:'))).toBe(false)
   })
 })

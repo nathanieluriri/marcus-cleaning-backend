@@ -41,9 +41,23 @@ export interface TotpSetupResult {
   otpauthUri: string
 }
 
-/** Begin (or restart) TOTP enrollment: stores a fresh pending secret, returns it + a QR-ready URI. */
-export async function setup(adminId: string): Promise<TotpSetupResult> {
+/**
+ * Begin (or restart) TOTP enrollment: stores a fresh pending secret, returns
+ * it + a QR-ready URI.
+ *
+ * Fresh enrollment (no TOTP ever enabled) needs no proof. RE-enrollment —
+ * `totpEnabledAt` already set — requires `code` to match the CURRENT live
+ * secret or an unused backup code; otherwise an attacker who steals a live
+ * session could silently swap in their own secret and lock the real admin
+ * out of 2FA without ever proving they control the existing factor.
+ */
+export async function setup(adminId: string, code?: string): Promise<TotpSetupResult> {
   const admin = await loadAdmin(adminId)
+  if (admin.totpEnabledAt != null) {
+    if (!code || !(await verifyTotpOrBackupCode({ ...admin, id: String(admin._id) }, code))) {
+      throw totpInvalid()
+    }
+  }
   const secret = generateSecret()
   await adminRepo.updateAdmin(adminId, { totpPendingSecret: secret })
   return { secret, otpauthUri: otpauthUri({ secret, accountName: admin.email }) }
