@@ -9,6 +9,8 @@ import type { AppContext } from '@/server/core/http-env'
 import { PasswordResetRequest, PasswordResetConfirm } from '@/server/schemas/password-reset'
 import * as passwordResetService from '@/server/services/password-reset-service'
 import { getSettings } from '@/server/core/settings'
+import { requireCustomer } from '@/server/security/guards'
+import { registerSessionRoutes } from './_session-routes'
 
 /**
  * /v1/customers — auth slice (signup / login / refresh).
@@ -199,3 +201,5 @@ customers.openapi(
     return c.json(ok(c, 'Password reset successfully', null), 200)
   },
 )
+
+registerSessionRoutes(customers, requireCustomer(), 'Customers')

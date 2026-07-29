@@ -74,7 +74,7 @@ function nowEpoch(): number {
 async function computePrice(
   payload: BookingCustomerCreateRequest,
 ): Promise<{ price: number | null; currency: string | null }> {
-  const quote = await computeQuote(payload.serviceId, resolveAddons(payload))
+  const quote = await computeQuote(payload.serviceId, resolveAddons(payload), payload.hours ?? null)
   return { price: quote.total, currency: quote.currency }
 }
 
@@ -147,6 +147,7 @@ async function createBookingFrom(c: AppContext, payload: BookingCustomerCreateRe
         schedule: payload.schedule,
         addons: resolveAddons(payload),
         notes: payload.notes ?? null,
+        hours: payload.hours ?? null,
         price,
         currency,
         payment_id: null,
@@ -216,8 +217,9 @@ bookings.openapi(quoteRouteDef, async (c) => {
   const quote = await computeQuote(
     payload.serviceId,
     payload.extras.map((addonId) => ({ addonId, quantity: 1 })),
+    payload.hours ?? null,
   )
-  return c.json(ok(c, 'Quote computed successfully', quote), 200)
+  return c.json(ok(c, 'Quote computed successfully', { ...quote, hours: payload.hours ?? null }), 200)
 })
 
 // GET / — list (customer or cleaner; scoped to the principal) ---------------

@@ -62,6 +62,7 @@ const EnvSchema = z
     PAYMENT_DEFAULT_PROVIDER: z.enum(['flutterwave', 'stripe', 'test']).default('test'),
     STRIPE_SECRET_KEY: z.string().optional(),
     STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    STRIPE_PUBLISHABLE_KEY: z.string().optional(),
     FLUTTERWAVE_SECRET_KEY: z.string().optional(),
     FLW_WEBHOOK_SECRET_HASH: z.string().optional(),
     TEST_PAYMENT_BASE_URL: z.string().optional(),
