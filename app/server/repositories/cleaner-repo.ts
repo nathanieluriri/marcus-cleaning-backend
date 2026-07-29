@@ -87,6 +87,14 @@ export async function updateLastAuthAt(id: string, epochSeconds: number): Promis
   await collection().updateOne(idFilter(id), { $set: { lastAuthAt: epochSeconds, lastUpdated: epochSeconds } })
 }
 
+/** Set a new bcrypt password hash for a cleaner. */
+export async function updatePassword(id: string, passwordHash: string): Promise<void> {
+  await ensureIndexes()
+  await collection().updateOne(idFilter(id), {
+    $set: { password: passwordHash, lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}
+
 export function toCleanerOut(doc: unknown): CleanerOutType {
   return CleanerOut.parse(fromDoc(doc))
 }

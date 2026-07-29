@@ -175,7 +175,7 @@ customers.openapi(
     const { email } = c.req.valid('json')
     // Trusted, server-configured base URL — never the request Host (prevents reset-link poisoning).
     const base = getSettings().PUBLIC_APP_URL.replace(/\/$/, '')
-    await passwordResetService.requestReset(email, (token) => `${base}/reset-password?token=${token}`)
+    await passwordResetService.requestReset('customer', email, (token) => `${base}/reset-password?token=${token}`)
     return c.json(ok(c, 'If that email exists, a reset link has been sent', null), 200)
   },
 )
@@ -195,7 +195,7 @@ customers.openapi(
   }),
   async (c) => {
     const { token, newPassword } = c.req.valid('json')
-    await passwordResetService.confirmReset(token, newPassword)
+    await passwordResetService.confirmReset('customer', token, newPassword)
     return c.json(ok(c, 'Password reset successfully', null), 200)
   },
 )
