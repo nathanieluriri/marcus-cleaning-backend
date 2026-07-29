@@ -15,8 +15,9 @@
 const SELF_SERVICE_PERMISSIONS = [
   'GET:/api/v1/admins/profile',
   'PATCH:/api/v1/admins/profile/language',
-  'GET:/api/v1/admins/sessions',
-  'DELETE:/api/v1/admins/sessions/:session_id',
+  'POST:/api/v1/admins/sessions/logout',
+  'POST:/api/v1/admins/sessions/revoke-all',
+  'POST:/api/v1/admins/sessions/revoke-others',
   'POST:/api/v1/admins/2fa/setup',
   'POST:/api/v1/admins/2fa/verify',
   'DELETE:/api/v1/admins/2fa',
@@ -36,17 +37,11 @@ const OPERATIONS_PERMISSIONS = [
   'GET:/api/v1/admins/onboarding/queue',
   'GET:/api/v1/bookings',
   'GET:/api/v1/bookings/:booking_id',
-  'PATCH:/api/v1/bookings/:booking_id',
   'GET:/api/v1/admins/users/autocomplete',
 ]
 
 const SUPPORT_PERMISSIONS = [
-  'GET:/api/v1/support',
-  'GET:/api/v1/support/:ticket_id',
-  'PATCH:/api/v1/support/:ticket_id',
   'GET:/api/v1/faq',
-  'POST:/api/v1/faq',
-  'PATCH:/api/v1/faq/:faq_id',
   'GET:/api/v1/conversations',
   'GET:/api/v1/conversations/:conversation_id',
 ]
@@ -57,21 +52,15 @@ const CONTENT_PERMISSIONS = [
   'PATCH:/api/v1/banners/:banner_id',
   'DELETE:/api/v1/banners/:banner_id',
   'GET:/api/v1/promotions',
-  'POST:/api/v1/promotions',
-  'PATCH:/api/v1/promotions/:promotion_id',
-  'DELETE:/api/v1/promotions/:promotion_id',
   'GET:/api/v1/admins/broadcasts',
   'POST:/api/v1/admins/broadcasts',
 ]
 
 const FINANCE_PERMISSIONS = [
-  'GET:/api/v1/payments',
   'GET:/api/v1/payments/:payment_id',
   'POST:/api/v1/payments/:payment_id/refund',
   'GET:/api/v1/admins/service-credits',
   'POST:/api/v1/admins/service-credits/grant',
-  'GET:/api/v1/admins/payouts',
-  'POST:/api/v1/admins/payouts/:payout_id/approve',
   'GET:/api/v1/admins/reports/users/summary',
   'GET:/api/v1/admins/reports/users/signups-trend',
 ]
@@ -95,17 +84,17 @@ export const ADMIN_PRESETS: Record<string, AdminPreset> = {
   },
   support_only: {
     label: 'Support',
-    description: 'Support tickets, FAQ and customer conversations.',
+    description: 'FAQ and customer conversations.',
     permissions: [...SUPPORT_PERMISSIONS, ...SELF_SERVICE_PERMISSIONS],
   },
   content_support: {
     label: 'Content & support',
-    description: 'Banners, promotions and broadcasts, plus support and FAQ.',
+    description: 'Banners and promotions, plus FAQ and customer conversations.',
     permissions: [...CONTENT_PERMISSIONS, ...SUPPORT_PERMISSIONS, ...SELF_SERVICE_PERMISSIONS],
   },
   finance_only: {
     label: 'Finance',
-    description: 'Payments, service credits, payouts and financial reports.',
+    description: 'Payments, service credits and financial reports.',
     permissions: [...FINANCE_PERMISSIONS, ...SELF_SERVICE_PERMISSIONS],
   },
 }

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach, beforeAll } from 'vitest'
+import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import crypto from 'node:crypto'
 import { __resetSettingsCache } from '@/server/core/settings'
 
 /**
@@ -40,7 +41,6 @@ interface ChallengeFixture {
 const adminsStore = new Map<string, AdminDocFixture>()
 const challengesStore = new Map<string, ChallengeFixture>()
 const sentOtps: { to: string; otp: string }[] = []
-let nextChallengeId = 1
 
 vi.mock('@/server/repositories/admin-repo', () => ({
   findByEmail: vi.fn(async (email: string) => [...adminsStore.values()].find((a) => a.email === email) ?? null),
@@ -74,10 +74,7 @@ vi.mock('@/server/repositories/admin-repo', () => ({
 
 vi.mock('@/server/repositories/admin-otp-repo', () => ({
   // Mirrors the real repo's randomBytes(24).toString('base64url') shape/entropy.
-  generateChallengeId: vi.fn(() => {
-    nextChallengeId += 1
-    return require('node:crypto').randomBytes(24).toString('base64url')
-  }),
+  generateChallengeId: vi.fn(() => crypto.randomBytes(24).toString('base64url')),
   insertChallenge: vi.fn(async (doc: ChallengeFixture) => {
     challengesStore.set(doc.challengeId, { ...doc })
     return { ...doc, _id: doc.challengeId }
@@ -155,13 +152,19 @@ beforeEach(() => {
   adminsStore.clear()
   challengesStore.clear()
   sentOtps.length = 0
-  nextChallengeId = 1
   vi.clearAllMocks()
   delete process.env.ADMIN_OTP_REQUIRED
   delete process.env.OTP_DEV_CODE
   vi.stubEnv('NODE_ENV', 'development')
   __resetSettingsCache()
   seedEnv()
+})
+
+afterAll(() => {
+  delete process.env.ADMIN_OTP_REQUIRED
+  delete process.env.OTP_DEV_CODE
+  vi.unstubAllEnvs()
+  __resetSettingsCache()
 })
 
 describe('admin login — OTP challenge lifecycle', () => {
