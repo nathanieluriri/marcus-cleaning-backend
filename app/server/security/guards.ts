@@ -24,7 +24,7 @@ function bearer(authHeader: string | undefined): string {
  * for the admin role only — the `admin_access` httpOnly cookie as a fallback
  * (the admin web frontend authenticates via cookie, not a stored token).
  */
-function tokenFrom(c: Parameters<Parameters<typeof createMiddleware<Env>>[0]>[0], role: Role): string {
+export function accessTokenFrom(c: Parameters<Parameters<typeof createMiddleware<Env>>[0]>[0], role: Role): string {
   const authHeader = c.req.header('Authorization')
   if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7)
   if (role === 'admin') {
@@ -38,7 +38,15 @@ function makeGuard(role: Role) {
   const audience = ROLE_TO_AUDIENCE[role]
   return () =>
     createMiddleware<Env>(async (c, next) => {
-      const token = tokenFrom(c, role)
+      // Idempotent: when a mount-level guard (admin-permission-guard) has
+      // already authenticated the request and set a principal of the right
+      // role, skip re-verifying — the token/account were checked once already.
+      const existing = c.get('principal')
+      if (existing && existing.role === role) {
+        await next()
+        return
+      }
+      const token = accessTokenFrom(c, role)
       const claims = await verifyAccessToken(token, audience)
       if (claims.role !== role) throw authRoleMismatch(role, claims.role)
 

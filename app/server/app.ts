@@ -10,6 +10,7 @@ import { timing } from './core/request-context'
 import { rateLimit } from './core/rate-limit'
 import { mountDocs } from './core/openapi'
 import { createRouter } from './core/router'
+import { adminPermissionGuard } from './security/admin-permission-guard'
 
 import { health } from './routes/health'
 import { customers } from './routes/customers'
@@ -82,6 +83,9 @@ app.use('/api/*', async (c, next) => {
 })
 app.use('/api/*', locale())
 app.use('/api/*', rateLimit())
+// Mount-level admin auth + permission enforcement — MUST run before the admin
+// routers (Task 7). See security/admin-permission-guard.ts.
+app.use('/api/v1/admins/*', adminPermissionGuard())
 
 // --- routers ---
 app.route('/api/v1/customers', customers)

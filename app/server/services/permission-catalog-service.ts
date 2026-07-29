@@ -1,13 +1,14 @@
 /**
- * Permission catalog + groups. Ported from `permission_catalog_service.py`.
- * The catalog is a static list of known permission keys (the original derives
- * it from `default_role_permissions.py`). No Hono/HTTP types here.
- *
- * TODO: replace the static catalog with the exact ported permission set.
- * See: docs/migration/06-services-and-repositories.md
+ * Permission catalog + groups. The catalog is DERIVED from the mounted admin
+ * routers' route tables (see `security/admin-permission-guard.ts`) so it can
+ * never drift from what the enforcement middleware actually gates. Keys are
+ * `METHOD:/api/v1/admins/<path with {param} placeholders>`. The old static
+ * catalog survives as human-label overrides for well-known routes.
+ * No Hono/HTTP types here.
  */
 
 import * as accessRepo from '@/server/repositories/admin-access-repo'
+import { getAdminRouteKeys, ADMIN_MOUNT } from '@/server/security/admin-permission-guard'
 
 export interface PermissionEntry {
   key: string
@@ -15,31 +16,69 @@ export interface PermissionEntry {
   category: string
 }
 
-const CATALOG: PermissionEntry[] = [
-  { key: 'customers.read', label: 'View customers', category: 'directory' },
-  { key: 'customers.write', label: 'Manage customers', category: 'directory' },
-  { key: 'cleaners.read', label: 'View cleaners', category: 'directory' },
-  { key: 'cleaners.write', label: 'Manage cleaners', category: 'directory' },
-  { key: 'cleaners.onboarding.review', label: 'Review cleaner onboarding', category: 'onboarding' },
-  { key: 'bookings.read', label: 'View bookings', category: 'bookings' },
-  { key: 'bookings.write', label: 'Manage bookings', category: 'bookings' },
-  { key: 'payments.read', label: 'View payments', category: 'payments' },
-  { key: 'payments.refund', label: 'Refund payments', category: 'payments' },
-  { key: 'pricing.write', label: 'Manage pricing rules', category: 'catalog' },
-  { key: 'promos.write', label: 'Manage promo codes', category: 'catalog' },
-  { key: 'credits.grant', label: 'Grant service credits', category: 'catalog' },
-  { key: 'broadcasts.dispatch', label: 'Dispatch broadcasts', category: 'comms' },
-  { key: 'claims.decide', label: 'Decide claims', category: 'ops' },
-  { key: 'monitoring.read', label: 'View monitoring', category: 'monitoring' },
-  { key: 'audit.export', label: 'Export audit logs', category: 'monitoring' },
-  { key: 'access.elevate', label: 'Request elevation', category: 'access' },
-  { key: 'access.decide', label: 'Decide access requests', category: 'access' },
-  { key: 'permissions.template.write', label: 'Manage role templates', category: 'access' },
-  { key: 'admins.write', label: 'Manage admins', category: 'access' },
-]
+/** Human labels carried over from the previous static catalog. */
+const LABEL_OVERRIDES: Record<string, { label: string; category: string }> = {
+  'GET:/api/v1/admins/customers': { label: 'View customers', category: 'directory' },
+  'GET:/api/v1/admins/customers/{customer_id}': { label: 'View customer', category: 'directory' },
+  'POST:/api/v1/admins/customers/{customer_id}/places': { label: 'Manage customers', category: 'directory' },
+  'GET:/api/v1/admins/cleaners': { label: 'View cleaners', category: 'directory' },
+  'GET:/api/v1/admins/cleaners/{cleaner_id}': { label: 'View cleaner', category: 'directory' },
+  'PATCH:/api/v1/admins/cleaners/{cleaner_id}/onboarding-review': {
+    label: 'Review cleaner onboarding',
+    category: 'onboarding',
+  },
+  'POST:/api/v1/admins/service-credits/grant': { label: 'Grant service credits', category: 'catalog' },
+  'POST:/api/v1/admins/broadcasts/dispatch': { label: 'Dispatch broadcasts', category: 'comms' },
+  'POST:/api/v1/admins/claim-reviews/{id}/decision': { label: 'Decide claims', category: 'ops' },
+  'GET:/api/v1/admins/monitoring/overview': { label: 'View monitoring', category: 'monitoring' },
+  'POST:/api/v1/admins/monitoring/audit/export': { label: 'Export audit logs', category: 'monitoring' },
+  'POST:/api/v1/admins/access/request-elevation': { label: 'Request elevation', category: 'access' },
+  'PATCH:/api/v1/admins/access/requests/{request_id}/decision': {
+    label: 'Decide access requests',
+    category: 'access',
+  },
+  'PUT:/api/v1/admins/permission-templates/{role}': { label: 'Manage role templates', category: 'access' },
+  'POST:/api/v1/admins/invites': { label: 'Manage admins', category: 'access' },
+}
 
+const METHOD_VERB: Record<string, string> = {
+  GET: 'View',
+  POST: 'Create',
+  PUT: 'Update',
+  PATCH: 'Update',
+  DELETE: 'Delete',
+}
+
+function isPlaceholder(segment: string): boolean {
+  return segment.startsWith('{') && segment.endsWith('}')
+}
+
+function deriveEntry(key: string): PermissionEntry {
+  const override = LABEL_OVERRIDES[key]
+  const sep = key.indexOf(':')
+  const method = key.slice(0, sep)
+  const relPath = key.slice(sep + 1 + ADMIN_MOUNT.length) || '/'
+  const words = relPath
+    .split('/')
+    .filter((s) => s && !isPlaceholder(s))
+    .join(' ')
+    .replace(/-/g, ' ')
+  const category = relPath.split('/').filter(Boolean)[0] ?? 'general'
+  return {
+    key,
+    label: override?.label ?? `${METHOD_VERB[method] ?? method} ${words}`.trim(),
+    category: override?.category ?? category,
+  }
+}
+
+let cachedCatalog: PermissionEntry[] | null = null
+
+/** The real, route-table-derived permission catalog (cached at module level). */
 export function getCatalog(): PermissionEntry[] {
-  return CATALOG
+  if (!cachedCatalog) {
+    cachedCatalog = getAdminRouteKeys().map(deriveEntry)
+  }
+  return cachedCatalog
 }
 
 export function listGroups(): Promise<Array<Record<string, unknown>>> {
