@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto'
+import { timingSafeStringEqual } from './hash'
 
 /**
  * Hand-rolled TOTP (RFC 6238) over HMAC-SHA1 (RFC 4226) + base32 (RFC 4648 §6,
@@ -97,13 +98,18 @@ export function verifyTotp(secretBase32: string, code: string, opts: VerifyTotpO
   const { timestamp = Math.floor(Date.now() / 1000), step = 30, digits = 6, window = 1 } = opts
   const normalized = code.trim()
   if (!normalized) return false
+  // Accumulate across every window candidate rather than early-returning on
+  // the first match — evaluating all of them keeps the total comparison work
+  // (and thus the timing profile) independent of which offset, if any,
+  // matched, on top of the constant-time comparison itself.
+  let matched = false
   for (let offset = -window; offset <= window; offset++) {
     const candidateTimestamp = timestamp + offset * step
     if (candidateTimestamp < 0) continue
     const candidate = totpCode(secretBase32, { timestamp: candidateTimestamp, step, digits })
-    if (candidate === normalized) return true
+    matched = timingSafeStringEqual(candidate, normalized) || matched
   }
-  return false
+  return matched
 }
 
 export interface OtpauthUriArgs {

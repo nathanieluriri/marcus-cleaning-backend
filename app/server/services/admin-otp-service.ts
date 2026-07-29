@@ -1,7 +1,7 @@
-import { randomInt, timingSafeEqual } from 'node:crypto'
+import { randomInt } from 'node:crypto'
 import { AppError } from '@/server/core/errors'
 import { getSettings } from '@/server/core/settings'
-import { sha256 } from '@/server/security/hash'
+import { sha256, timingSafeStringEqual } from '@/server/security/hash'
 import * as otpRepo from '@/server/repositories/admin-otp-repo'
 import * as adminRepo from '@/server/repositories/admin-repo'
 import * as adminTotpService from '@/server/services/admin-totp-service'
@@ -39,19 +39,6 @@ const otpInvalid = () => new AppError(401, 'OTP_INVALID', 'Invalid or expired co
 const otpExpired = () => new AppError(401, 'OTP_EXPIRED', 'Code has expired')
 const otpLocked = () =>
   new AppError(429, 'OTP_LOCKED', 'Too many failed attempts', { retry_after_seconds: CHALLENGE_TTL_SECONDS })
-
-/**
- * Constant-time string comparison. Ordinary `===`/hash comparisons short-circuit
- * on the first differing byte, which leaks a timing signal an attacker can use
- * to recover a secret one character at a time — unacceptable for OTP/dev-code
- * comparisons even though the underlying values are short-lived.
- */
-function timingSafeStringEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8')
-  const bufB = Buffer.from(b, 'utf8')
-  if (bufA.length !== bufB.length) return false
-  return timingSafeEqual(bufA, bufB)
-}
 
 /** Live TOTP-or-backup-code verification, delegated to `admin-totp-service` (Task 3). */
 export async function verifyTotpOrBackupCode(admin: AdminDoc & { id: string }, code: string): Promise<boolean> {
