@@ -4,6 +4,7 @@ import { getSettings } from '@/server/core/settings'
 import { sha256 } from '@/server/security/hash'
 import * as otpRepo from '@/server/repositories/admin-otp-repo'
 import * as adminRepo from '@/server/repositories/admin-repo'
+import * as adminTotpService from '@/server/services/admin-totp-service'
 import { sendOtpEmail } from '@/server/core/email/send'
 import * as sessions from './auth-session-service'
 import type { DeviceInfo } from './auth-session-service'
@@ -52,12 +53,9 @@ function timingSafeStringEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB)
 }
 
-/**
- * Seam for Task 3: real TOTP + backup-code verification lands here once
- * `security/totp.ts` + `admin-totp-service.ts` exist. Always rejects for now.
- */
-export async function verifyTotpOrBackupCode(_admin: AdminDoc & { id: string }, _code: string): Promise<boolean> {
-  return false
+/** Live TOTP-or-backup-code verification, delegated to `admin-totp-service` (Task 3). */
+export async function verifyTotpOrBackupCode(admin: AdminDoc & { id: string }, code: string): Promise<boolean> {
+  return adminTotpService.verifyTotpOrBackupCode(admin, code)
 }
 
 function generateSixDigitCode(): string {

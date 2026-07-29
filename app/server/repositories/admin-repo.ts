@@ -54,6 +54,21 @@ export async function updateAdmin(id: string, patch: Partial<AdminDoc>): Promise
   })
 }
 
+/**
+ * Atomically remove one backup-code hash from `backupCodes`. `$pull` is used
+ * (rather than read-modify-write of the full array) so two concurrent
+ * requests racing to consume the same single-use code can't both succeed.
+ * Returns whether the hash was actually present and removed.
+ */
+export async function consumeBackupCode(id: string, hash: string): Promise<boolean> {
+  await ensureIndexes()
+  const result = await collection().updateOne(idFilter(id), {
+    $pull: { backupCodes: hash },
+    $set: { lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+  return result.modifiedCount > 0
+}
+
 const clamp = (n: number | undefined, def: number) => Math.min(Math.max(n ?? def, 1), 500)
 
 export interface ListAdminsResult {

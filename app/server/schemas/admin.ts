@@ -55,6 +55,29 @@ export const AdminVerifyOtpRequest = z
   .openapi('AdminVerifyOtpRequest')
 export type AdminVerifyOtpRequest = z.infer<typeof AdminVerifyOtpRequest>
 
+/** `POST /admins/2fa/setup` response: pending secret + QR-ready otpauth URI. */
+export const TotpSetupData = z
+  .object({ secret: z.string(), otpauthUri: z.string() })
+  .openapi('TotpSetupData')
+export type TotpSetupData = z.infer<typeof TotpSetupData>
+
+export const TotpVerifyRequest = z.object({ code: z.string().min(1) }).openapi('TotpVerifyRequest')
+export type TotpVerifyRequest = z.infer<typeof TotpVerifyRequest>
+
+/** Backup codes returned in plaintext exactly once, on enrollment/regeneration. */
+export const TotpBackupCodesData = z
+  .object({ backupCodes: z.array(z.string()) })
+  .openapi('TotpBackupCodesData')
+export type TotpBackupCodesData = z.infer<typeof TotpBackupCodesData>
+
+export const TotpDisableRequest = z.object({ code: z.string().min(1) }).openapi('TotpDisableRequest')
+export type TotpDisableRequest = z.infer<typeof TotpDisableRequest>
+
+export const TotpRegenerateBackupCodesRequest = z
+  .object({ code: z.string().min(1) })
+  .openapi('TotpRegenerateBackupCodesRequest')
+export type TotpRegenerateBackupCodesRequest = z.infer<typeof TotpRegenerateBackupCodesRequest>
+
 export interface AdminDoc {
   firstName: string
   lastName: string

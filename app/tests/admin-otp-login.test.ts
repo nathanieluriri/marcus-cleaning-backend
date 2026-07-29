@@ -19,7 +19,9 @@ interface AdminDocFixture {
   preferredLanguage: 'en' | 'fr'
   mustChangePassword?: boolean
   tempPasswordExpiresAt?: number | null
+  totpSecret?: string | null
   totpEnabledAt?: number | null
+  backupCodes?: string[]
   dateCreated: number
   lastUpdated: number
 }
@@ -47,6 +49,12 @@ vi.mock('@/server/repositories/admin-repo', () => ({
     throw new Error('not used in these tests')
   }),
   updateLastAuthAt: vi.fn(async () => {}),
+  consumeBackupCode: vi.fn(async (id: string, hash: string) => {
+    const admin = adminsStore.get(id)
+    if (!admin?.backupCodes?.includes(hash)) return false
+    admin.backupCodes = admin.backupCodes.filter((h) => h !== hash)
+    return true
+  }),
   toAdminOut: vi.fn((doc: AdminDocFixture) => ({
     id: doc._id,
     firstName: doc.firstName,
@@ -102,7 +110,8 @@ vi.mock('@/server/services/auth-session-service', () => ({
 import * as adminService from '@/server/services/admin-service'
 import * as adminOtpService from '@/server/services/admin-otp-service'
 import { assertProductionPosture } from '@/server/core/security-posture'
-import { hashPassword } from '@/server/security/hash'
+import { hashPassword, sha256 } from '@/server/security/hash'
+import { totpCode } from '@/server/security/totp'
 import { issueSession } from '@/server/services/auth-session-service'
 import { sendOtpEmail } from '@/server/core/email/send'
 
@@ -320,6 +329,74 @@ describe('admin login — OTP challenge lifecycle', () => {
       httpStatus: 401,
     })
     expect(sendOtpEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('admin login — TOTP method once enrolled', () => {
+  const TOTP_SECRET = 'JBSWY3DPEHPK3PXP'
+
+  it('flips the challenge method to totp and issues no email for an enrolled admin', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin({ totpSecret: TOTP_SECRET, totpEnabledAt: Math.floor(Date.now() / 1000) })
+
+    const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    expect(loginResult).toMatchObject({ otpRequired: true, method: 'totp' })
+    expect(sentOtps).toHaveLength(0)
+  })
+
+  it('accepts a live TOTP code for a totp-method challenge', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin({ totpSecret: TOTP_SECRET, totpEnabledAt: Math.floor(Date.now() / 1000) })
+    const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in loginResult)) throw new Error('expected challenge')
+
+    const result = await adminOtpService.verifyChallenge({
+      challengeId: loginResult.otpChallengeId,
+      code: totpCode(TOTP_SECRET),
+      device,
+    })
+    expect(result.admin.email).toBe(admin.email)
+  })
+
+  it('accepts a single-use backup code for a totp-method challenge, then rejects reuse', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const backupPlain = 'ABCDEFGH12'
+    const admin = seedAdmin({
+      totpSecret: TOTP_SECRET,
+      totpEnabledAt: Math.floor(Date.now() / 1000),
+      backupCodes: [sha256(backupPlain)],
+    })
+
+    const first = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in first)) throw new Error('expected challenge')
+    const result = await adminOtpService.verifyChallenge({
+      challengeId: first.otpChallengeId,
+      code: backupPlain,
+      device,
+    })
+    expect(result.admin.email).toBe(admin.email)
+    expect(admin.backupCodes).toEqual([])
+
+    const second = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in second)) throw new Error('expected challenge')
+    await expect(
+      adminOtpService.verifyChallenge({ challengeId: second.otpChallengeId, code: backupPlain, device }),
+    ).rejects.toMatchObject({ code: 'OTP_INVALID', httpStatus: 401 })
+  })
+
+  it('rejects a wrong code for a totp-method challenge', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin({ totpSecret: TOTP_SECRET, totpEnabledAt: Math.floor(Date.now() / 1000) })
+    const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in loginResult)) throw new Error('expected challenge')
+
+    await expect(
+      adminOtpService.verifyChallenge({ challengeId: loginResult.otpChallengeId, code: '000000', device }),
+    ).rejects.toMatchObject({ code: 'OTP_INVALID', httpStatus: 401 })
   })
 })
 
