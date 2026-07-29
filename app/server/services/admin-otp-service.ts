@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto'
+import { randomInt, timingSafeEqual } from 'node:crypto'
 import { AppError } from '@/server/core/errors'
 import { getSettings } from '@/server/core/settings'
 import { sha256 } from '@/server/security/hash'
@@ -17,6 +17,7 @@ import type { AdminDoc, AdminOut } from '@/server/schemas/admin'
  */
 
 const CHALLENGE_TTL_SECONDS = 600
+/** Max wrong-code attempts a challenge accepts before it locks (see `incrementAttemptsIfUnderLimit`). */
 const MAX_ATTEMPTS = 5
 const nowEpoch = () => Math.floor(Date.now() / 1000)
 
@@ -37,6 +38,19 @@ const otpInvalid = () => new AppError(401, 'OTP_INVALID', 'Invalid or expired co
 const otpExpired = () => new AppError(401, 'OTP_EXPIRED', 'Code has expired')
 const otpLocked = () =>
   new AppError(429, 'OTP_LOCKED', 'Too many failed attempts', { retry_after_seconds: CHALLENGE_TTL_SECONDS })
+
+/**
+ * Constant-time string comparison. Ordinary `===`/hash comparisons short-circuit
+ * on the first differing byte, which leaks a timing signal an attacker can use
+ * to recover a secret one character at a time — unacceptable for OTP/dev-code
+ * comparisons even though the underlying values are short-lived.
+ */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8')
+  const bufB = Buffer.from(b, 'utf8')
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
 
 /**
  * Seam for Task 3: real TOTP + backup-code verification lands here once
@@ -66,7 +80,9 @@ export async function createChallenge(admin: {
     await sendOtpEmail({ to: admin.email, otp: code })
   }
 
-  const stored = await otpRepo.insertChallenge({
+  const challengeId = otpRepo.generateChallengeId()
+  await otpRepo.insertChallenge({
+    challengeId,
     adminId: admin.id,
     codeHash,
     method,
@@ -76,7 +92,7 @@ export async function createChallenge(admin: {
     dateCreated: ts,
   })
 
-  return { challengeId: String(stored._id), method }
+  return { challengeId, method }
 }
 
 /** Verify a challenge code and, on success, issue a session like `login` does. */
@@ -85,35 +101,39 @@ export async function verifyChallenge(args: {
   code: string
   device: DeviceInfo
 }): Promise<AdminOtpVerifyResult> {
-  const challenge = await otpRepo.findById(args.challengeId)
+  const challenge = await otpRepo.findByChallengeId(args.challengeId)
   if (!challenge) throw otpInvalid()
   if (challenge.consumedAt) throw otpInvalid()
 
   const ts = nowEpoch()
   if (challenge.expiresAt < ts) throw otpExpired()
-  if (challenge.attempts >= MAX_ATTEMPTS) throw otpLocked()
 
-  const raw = await adminRepo.findById(challenge.adminId)
+  // Atomic check-and-increment: a stale-read gate (read attempts, compare,
+  // then $inc separately) lets concurrent guesses all pass the check before
+  // any of them lands the increment. This does both in one round trip.
+  const incremented = await otpRepo.incrementAttemptsIfUnderLimit(args.challengeId, MAX_ATTEMPTS)
+  if (!incremented) throw otpLocked()
+
+  const raw = await adminRepo.findById(incremented.adminId)
   if (!raw) throw otpInvalid()
 
   const s = getSettings()
-  const devCodeAccepted = s.NODE_ENV !== 'production' && !!s.OTP_DEV_CODE && s.OTP_DEV_CODE === args.code
+  const devCodeAccepted =
+    s.NODE_ENV !== 'production' && !!s.OTP_DEV_CODE && timingSafeStringEqual(s.OTP_DEV_CODE, args.code)
 
   let accepted = devCodeAccepted
   if (!accepted) {
-    if (challenge.method === 'totp') {
+    if (incremented.method === 'totp') {
       accepted = await verifyTotpOrBackupCode({ ...raw, id: String(raw._id) }, args.code)
     } else {
-      accepted = !!challenge.codeHash && sha256(args.code) === challenge.codeHash
+      accepted = !!incremented.codeHash && timingSafeStringEqual(sha256(args.code), incremented.codeHash)
     }
   }
 
-  if (!accepted) {
-    const attempts = await otpRepo.incrementAttempts(args.challengeId)
-    if (attempts >= MAX_ATTEMPTS) throw otpLocked()
-    throw otpInvalid()
-  }
+  if (!accepted) throw otpInvalid()
 
+  // Successful verify consumes the challenge regardless of how many attempts
+  // it took — no need to "give back" the attempt this call used.
   await otpRepo.markConsumed(args.challengeId, ts)
 
   const admin = adminRepo.toAdminOut(raw)

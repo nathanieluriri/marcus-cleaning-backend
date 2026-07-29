@@ -25,7 +25,7 @@ interface AdminDocFixture {
 }
 
 interface ChallengeFixture {
-  _id: string
+  challengeId: string
   adminId: string
   codeHash: string | null
   method: 'email' | 'totp'
@@ -65,21 +65,26 @@ vi.mock('@/server/repositories/admin-repo', () => ({
 }))
 
 vi.mock('@/server/repositories/admin-otp-repo', () => ({
-  insertChallenge: vi.fn(async (doc: Omit<ChallengeFixture, '_id'>) => {
-    const _id = String(nextChallengeId++)
-    const stored = { ...doc, _id }
-    challengesStore.set(_id, stored)
-    return stored
+  // Mirrors the real repo's randomBytes(24).toString('base64url') shape/entropy.
+  generateChallengeId: vi.fn(() => {
+    nextChallengeId += 1
+    return require('node:crypto').randomBytes(24).toString('base64url')
   }),
-  findById: vi.fn(async (id: string) => challengesStore.get(id) ?? null),
-  incrementAttempts: vi.fn(async (id: string) => {
-    const c = challengesStore.get(id)
-    if (!c) return 0
+  insertChallenge: vi.fn(async (doc: ChallengeFixture) => {
+    challengesStore.set(doc.challengeId, { ...doc })
+    return { ...doc, _id: doc.challengeId }
+  }),
+  findByChallengeId: vi.fn(async (challengeId: string) => challengesStore.get(challengeId) ?? null),
+  // Mirrors the real Mongo findOneAndUpdate({challengeId, attempts:{$lt:max}}, {$inc:{attempts:1}})
+  // check-and-increment: null when already at/over the limit, no code check ever performed.
+  incrementAttemptsIfUnderLimit: vi.fn(async (challengeId: string, maxAttempts: number) => {
+    const c = challengesStore.get(challengeId)
+    if (!c || c.attempts >= maxAttempts) return null
     c.attempts += 1
-    return c.attempts
+    return { ...c }
   }),
-  markConsumed: vi.fn(async (id: string, at: number) => {
-    const c = challengesStore.get(id)
+  markConsumed: vi.fn(async (challengeId: string, at: number) => {
+    const c = challengesStore.get(challengeId)
     if (c) c.consumedAt = at
   }),
 }))
@@ -173,21 +178,60 @@ describe('admin login — OTP challenge lifecycle', () => {
     expect(issueSession).toHaveBeenCalledTimes(1)
   })
 
-  it('locks after 5 wrong attempts (OTP_LOCKED, 429)', async () => {
+  it('locks after the attempt budget (5) is exhausted — the 6th call is OTP_LOCKED without checking the code', async () => {
     process.env.ADMIN_OTP_REQUIRED = 'true'
     __resetSettingsCache()
     const admin = seedAdmin()
     const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
     if (!('otpRequired' in loginResult)) throw new Error('expected challenge')
 
-    for (let i = 0; i < 4; i++) {
+    // Atomic check-and-increment allows attempts while attempts < 5, so 5
+    // wrong guesses each consume a slot (OTP_INVALID); the 6th finds
+    // attempts already at 5 and is locked out before the code is compared.
+    for (let i = 0; i < 5; i++) {
       await expect(
         adminOtpService.verifyChallenge({ challengeId: loginResult.otpChallengeId, code: '000000', device }),
       ).rejects.toMatchObject({ code: 'OTP_INVALID', httpStatus: 401 })
     }
     await expect(
-      adminOtpService.verifyChallenge({ challengeId: loginResult.otpChallengeId, code: '000000', device }),
+      // Even the correct code is refused once locked — the gate never lets it be checked.
+      adminOtpService.verifyChallenge({ challengeId: loginResult.otpChallengeId, code: sentOtps[0].otp, device }),
     ).rejects.toMatchObject({ code: 'OTP_LOCKED', httpStatus: 429 })
+  })
+
+  it('closes the stale-read race: a burst of concurrent guesses never exceeds the attempt budget', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in loginResult)) throw new Error('expected challenge')
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, () =>
+        adminOtpService.verifyChallenge({ challengeId: loginResult.otpChallengeId, code: '000000', device }),
+      ),
+    )
+    const invalid = results.filter(
+      (r) => r.status === 'rejected' && (r.reason as { code?: string }).code === 'OTP_INVALID',
+    )
+    const locked = results.filter(
+      (r) => r.status === 'rejected' && (r.reason as { code?: string }).code === 'OTP_LOCKED',
+    )
+    expect(invalid).toHaveLength(5)
+    expect(locked).toHaveLength(5)
+    expect(challengesStore.get(loginResult.otpChallengeId)?.attempts).toBe(5)
+  })
+
+  it('returns an opaque, non-sequential challenge id (not the raw Mongo _id)', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const loginResult = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in loginResult)) throw new Error('expected challenge')
+
+    // Not a bare ObjectId-shaped 24-hex-char string.
+    expect(loginResult.otpChallengeId).not.toMatch(/^[0-9a-f]{24}$/)
+    expect(loginResult.otpChallengeId.length).toBeGreaterThan(20)
   })
 
   it('rejects an expired challenge', async () => {
