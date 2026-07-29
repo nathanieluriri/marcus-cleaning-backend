@@ -51,6 +51,8 @@ export const BookingCustomerCreateRequest = z
     /** Legacy app alias: a flat list of add-on ids. Coalesced via resolveAddons(). */
     extras: z.array(z.string()).optional(),
     notes: z.string().nullable().optional(),
+    /** Booking duration in hours, for hourly-priced services. */
+    hours: z.number().positive().max(24).optional(),
   })
   .openapi('BookingCustomerCreateRequest')
 export type BookingCustomerCreateRequest = z.infer<typeof BookingCustomerCreateRequest>
@@ -82,6 +84,8 @@ export const BookingQuoteRequest = z
     schedule: z.number().int().optional().openapi({ example: 1750000000 }),
     placeId: z.string().optional(),
     cleanerId: z.string().nullable().optional(),
+    /** Booking duration in hours, for hourly-priced services. */
+    hours: z.number().positive().max(24).optional(),
   })
   .openapi('BookingQuoteRequest')
 export type BookingQuoteRequest = z.infer<typeof BookingQuoteRequest>
@@ -94,6 +98,7 @@ export const BookingQuoteOut = z
     fees: z.number().openapi({ example: 0 }),
     total: z.number().openapi({ example: 65 }),
     currency: z.string().openapi({ example: 'USD' }),
+    hours: z.number().nullable().default(null).openapi({ example: 3 }),
   })
   .openapi('BookingQuoteOut')
 export type BookingQuoteOut = z.infer<typeof BookingQuoteOut>
@@ -216,6 +221,7 @@ export const BookingOut = z
     schedule: z.number().int(),
     addons: z.array(BookingAddon).default([]),
     notes: z.string().nullable().default(null),
+    hours: z.number().nullable().default(null),
     price: z.number().nullable().default(null),
     currency: z.string().nullable().default(null),
     payment_id: z.string().nullable().default(null),
@@ -270,6 +276,7 @@ export interface BookingDoc {
   schedule: number
   addons?: BookingAddon[]
   notes?: string | null
+  hours?: number | null
   price?: number | null
   currency?: string | null
   payment_id?: string | null
