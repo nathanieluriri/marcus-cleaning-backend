@@ -3,6 +3,7 @@ import * as notificationsRepo from '@/server/repositories/notifications-repo'
 import * as deviceRepo from '@/server/repositories/device-repo'
 import type { BookingOut } from '@/server/schemas/booking'
 import type { NotificationOut } from '@/server/schemas/notification'
+import { navigationFor } from '@/server/services/notification-routing'
 
 /**
  * One place that turns a domain event into (a) a persisted notification row and
@@ -53,16 +54,19 @@ export async function notify(args: {
     lastUpdated: ts,
   })
 
-  await push(args.userId, args.role, {
-    title: args.title,
-    body: args.body,
-    data: { ...stringifyData(args.data), notificationId: stored.id, type: args.type ?? '' },
-  })
+  const data = { ...stringifyData(args.data), notificationId: stored.id, type: args.type ?? '' }
+  await push(args.userId, args.role, { title: args.title, body: args.body, data })
 
   return stored
 }
 
-/** Push to every active device for a user. Silent no-op when FCM is unconfigured. */
+/**
+ * Push to every active device for a user. Silent no-op when FCM is unconfigured.
+ *
+ * The navigation half of the payload (channel, sound, route, deep link, entity
+ * refs) is resolved centrally in notification-routing, so callers only supply
+ * the human-facing text and the ids.
+ */
 export async function push(
   userId: string,
   role: Recipient,
@@ -74,9 +78,27 @@ export async function push(
       deviceRepo.listActiveFor(userId, role),
       notificationsRepo.countUnread(userId, role),
     ])
+    if (devices.length === 0) return
+
+    const nav = navigationFor(msg.data?.type, msg.data ?? {}, role)
+    const data: Record<string, string> = { ...(msg.data ?? {}) }
+    if (nav.route) data.route = nav.route
+    if (nav.deepLink) data.deepLink = nav.deepLink
+    if (nav.entityType) data.entityType = nav.entityType
+    if (nav.entityId) data.entityId = nav.entityId
+
     await Promise.all(
       devices.map(async (device) => {
-        const outcome = await fcm.send({ token: device.token, badge: unread, ...msg })
+        const outcome = await fcm.send({
+          token: device.token,
+          title: msg.title,
+          body: msg.body,
+          data,
+          badge: unread,
+          channelId: nav.channelId,
+          sound: nav.sound,
+          collapseKey: nav.collapseKey,
+        })
         if (!outcome.ok && outcome.tokenInvalid) await deviceRepo.disableToken(device.token)
       }),
     )

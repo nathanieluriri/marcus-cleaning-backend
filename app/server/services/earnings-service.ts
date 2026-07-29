@@ -1,4 +1,4 @@
-import { badRequest, conflict } from '@/server/core/errors'
+import { badRequest, conflict, notFound } from '@/server/core/errors'
 import { getSettings } from '@/server/core/settings'
 import type { AuthPrincipal } from '@/server/security/principal'
 import * as sessionRepo from '@/server/repositories/job-session-repo'
@@ -248,4 +248,95 @@ export async function requestCashOut(args: {
   })
 
   return payout
+}
+
+// --- settlement -------------------------------------------------------------
+
+/** Payout statuses an admin (or the reconciler) may move a payout into. */
+const SETTLEMENT_ALLOWED: Record<string, readonly string[]> = {
+  PENDING: ['PROCESSING', 'PAID', 'FAILED', 'CANCELLED'],
+  PROCESSING: ['PAID', 'FAILED'],
+  PAID: [],
+  FAILED: [],
+  CANCELLED: [],
+}
+
+/**
+ * Move a payout to its settled state and tell the cleaner.
+ *
+ * PAID and FAILED are terminal, and the transition table is enforced so a
+ * duplicate webhook or a double click cannot pay someone twice or resurrect a
+ * failed payout. A FAILED or CANCELLED payout stops reserving balance, so the
+ * amount becomes available again automatically (getBalance only counts
+ * PENDING/PROCESSING as in-flight).
+ */
+export async function settlePayout(args: {
+  payoutId: string
+  status: 'PROCESSING' | 'PAID' | 'FAILED' | 'CANCELLED'
+  reference?: string | null
+  failureReason?: string | null
+}): Promise<PayoutOut> {
+  const payout = await payoutRepo.getById(args.payoutId)
+  if (!payout) throw notFound('Payout not found')
+
+  const allowed = SETTLEMENT_ALLOWED[payout.status] ?? []
+  if (!allowed.includes(args.status)) {
+    throw badRequest(`Cannot move a payout from ${payout.status} to ${args.status}`, {
+      from: payout.status,
+      to: args.status,
+      allowed,
+    })
+  }
+
+  const now = nowEpoch()
+  const updated = await payoutRepo.update(args.payoutId, {
+    status: args.status,
+    reference: args.reference ?? payout.reference,
+    failureReason: args.status === 'FAILED' ? (args.failureReason ?? 'Payout failed') : null,
+    paidAt: args.status === 'PAID' ? now : payout.paidAt,
+  })
+
+  const messages: Partial<Record<typeof args.status, { title: string; body: string; type: string }>> = {
+    PAID: {
+      title: 'Cash-out paid',
+      body: `Your payout of ${updated!.netAmount} is on its way to your account.`,
+      type: 'payout.paid',
+    },
+    FAILED: {
+      title: 'Cash-out failed',
+      body: args.failureReason
+        ? `Your payout could not be completed: ${args.failureReason}`
+        : 'Your payout could not be completed. The amount is back in your balance.',
+      type: 'payout.failed',
+    },
+    CANCELLED: {
+      title: 'Cash-out cancelled',
+      body: 'Your payout was cancelled and the amount is back in your balance.',
+      type: 'payout.failed',
+    },
+  }
+
+  const message = messages[args.status]
+  if (message) {
+    await notify({
+      userId: payout.cleanerId,
+      role: 'cleaner',
+      title: message.title,
+      body: message.body,
+      type: message.type,
+      data: {
+        payoutId: payout.id,
+        amount: updated!.amount,
+        netAmount: updated!.netAmount,
+        ...(args.failureReason ? { failureReason: args.failureReason } : {}),
+      },
+    })
+  }
+
+  return updated!
+}
+
+/** Payouts awaiting settlement — the reconciliation cron's work list. */
+export async function listUnsettledPayouts(limit = 50): Promise<PayoutOut[]> {
+  return payoutRepo.listUnsettled(limit)
 }

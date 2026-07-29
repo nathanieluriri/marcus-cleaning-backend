@@ -252,6 +252,25 @@ export async function listQueue(args: {
   return { items, total: result.total }
 }
 
+/**
+ * Map the admin's `missingFields` onto the wizard step the cleaner must return
+ * to. The first matching field wins — sending them to the earliest incomplete
+ * step is less confusing than picking an arbitrary one.
+ */
+export function wizardStepFor(
+  missingFields: string[] | null | undefined,
+): 'documents' | 'services' | 'availability' | 'payout' | 'personal' | null {
+  if (!missingFields?.length) return null
+  const has = (prefix: string) => missingFields.some((f) => f.startsWith(prefix))
+
+  if (has('personalDetails')) return 'personal'
+  if (has('documents')) return 'documents'
+  if (has('serviceIds') || has('serviceRadius')) return 'services'
+  if (has('availability')) return 'availability'
+  if (has('payoutDetails')) return 'payout'
+  return null
+}
+
 const DECISION_TO_STATUS: Record<ApplicationDecisionRequest['decision'], ApplicationStatus> = {
   START_REVIEW: 'UNDER_REVIEW',
   APPROVE: 'APPROVED',
@@ -301,6 +320,8 @@ export async function decideApplication(args: {
     reviewedBy: args.principal.userId,
   })
 
+  const missingStep = wizardStepFor(args.payload.missingFields)
+
   // Keep the cleaner account's onboarding state in step with the application,
   // since the job-access guards read the account, not the application.
   const ONBOARDING: Partial<Record<ApplicationStatus, CleanerOnboardingStatus>> = {
@@ -321,7 +342,13 @@ export async function decideApplication(args: {
     title: message.title,
     body: args.payload.note ?? message.body,
     type: `application.${target.toLowerCase()}`,
-    data: { applicationId: row.id, status: target },
+    data: {
+      applicationId: row.id,
+      status: target,
+      // Lets the staff app deep-link to the wizard step that needs work rather
+      // than dumping the cleaner on a generic status screen.
+      ...(missingStep ? { missingStep } : {}),
+    },
   })
 
   return present(updated!)

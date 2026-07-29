@@ -47,6 +47,29 @@ export async function findById(id: string): Promise<WithId<CleanerDoc> | null> {
   return collection().findOne(idFilter(id))
 }
 
+/** Ids of ACTIVE cleaners, optionally narrowed by onboarding status. */
+export async function listActiveIds(onboardingStatus?: string): Promise<string[]> {
+  await ensureIndexes()
+  const filter: Record<string, unknown> = { accountStatus: 'ACTIVE' }
+  if (onboardingStatus) filter.onboardingStatus = onboardingStatus
+  const rows = await collection().find(filter, { projection: { _id: 1 } }).toArray()
+  return rows.map((r) => String(r._id))
+}
+
+/**
+ * Ids that have explicitly turned marketing notifications OFF.
+ *
+ * Only an explicit `false` counts — an account that has never touched the
+ * setting is opted IN, matching the documented default.
+ */
+export async function listMarketingOptOutIds(): Promise<string[]> {
+  await ensureIndexes()
+  const rows = await collection()
+    .find({ 'settings.notifications.marketing': false }, { projection: { _id: 1 } })
+    .toArray()
+  return rows.map((r) => String(r._id))
+}
+
 export async function insertCleaner(doc: CleanerDoc): Promise<CleanerOutType> {
   await ensureIndexes()
   const result = await collection().insertOne(doc)
@@ -62,6 +85,14 @@ export async function updateCleaner(id: string, patch: Partial<CleanerDoc>): Pro
 
 export async function updateLastAuthAt(id: string, epochSeconds: number): Promise<void> {
   await collection().updateOne(idFilter(id), { $set: { lastAuthAt: epochSeconds, lastUpdated: epochSeconds } })
+}
+
+/** Set a new bcrypt password hash for a cleaner. */
+export async function updatePassword(id: string, passwordHash: string): Promise<void> {
+  await ensureIndexes()
+  await collection().updateOne(idFilter(id), {
+    $set: { password: passwordHash, lastUpdated: Math.floor(Date.now() / 1000) },
+  })
 }
 
 export function toCleanerOut(doc: unknown): CleanerOutType {

@@ -33,6 +33,7 @@ import { cleanerProfile } from './routes/cleaner-profile'
 import { cleanerApplications } from './routes/cleaner-applications'
 import { cleanerWorkspace } from './routes/cleaner-workspace'
 import { adminSafety } from './routes/admin-safety'
+import { adminBroadcasts } from './routes/admin-broadcasts'
 import { chat } from './routes/chat'
 import { devices } from './routes/devices'
 import { promotions } from './routes/promotions'
@@ -91,6 +92,7 @@ app.route('/api/v1/admins', admins)
 app.route('/api/v1/admins', adminCore)
 app.route('/api/v1/admins', adminFeatures)
 app.route('/api/v1/admins', adminSafety)
+app.route('/api/v1/admins', adminBroadcasts)
 app.route('/api/v1/bookings', bookingDiscovery)
 app.route('/api/v1/bookings', bookings)
 app.route('/api/v1/payments', payments)

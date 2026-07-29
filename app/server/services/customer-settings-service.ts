@@ -19,7 +19,10 @@ function nowEpoch(): number {
 
 /** Default settings shape returned when a customer doc has no `settings` yet. */
 const DEFAULT_SETTINGS = {
-  notifications: { push: true, email: true, sms: false },
+  // `marketing` gates promotional broadcasts only. Transactional notifications
+  // (bookings, jobs, payouts, chat, safety) ignore it — a user who opted out of
+  // offers still needs to know their cleaner is at the door.
+  notifications: { push: true, email: true, sms: false, marketing: true },
   security: { twoFactorEnabled: false },
   privacy: { profileVisible: true, shareUsageData: false },
 } as const
