@@ -4,20 +4,28 @@ import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
 import type { AppContext } from '@/server/core/http-env'
 import { requireAdmin, principalOf } from '@/server/security/guards'
 import {
+  setAdminSessionCookies,
+  clearAdminSessionCookies,
+  readAdminRefreshCookie,
+} from '@/server/security/admin-cookies'
+import {
   AdminLogin,
   AdminOut,
   AdminLoginChallengeData,
   AdminVerifyOtpRequest,
+  AdminChangePasswordRequest,
   TotpSetupData,
   TotpVerifyRequest,
   TotpBackupCodesData,
   TotpDisableRequest,
   TotpRegenerateBackupCodesRequest,
 } from '@/server/schemas/admin'
-import { RefreshRequest, TokenResponse, readRefreshToken } from '@/server/schemas/auth'
+import { TokenResponse } from '@/server/schemas/auth'
+import { authInvalidToken } from '@/server/core/errors'
 import * as adminService from '@/server/services/admin-service'
 import * as adminOtpService from '@/server/services/admin-otp-service'
 import * as adminTotpService from '@/server/services/admin-totp-service'
+import * as sessions from '@/server/services/auth-session-service'
 import { registerSessionRoutes } from './_session-routes'
 
 /**
@@ -39,8 +47,21 @@ function tokens(r: { accessToken: string; refreshToken: string; expiresIn: numbe
   return { accessToken: r.accessToken, refreshToken: r.refreshToken, tokenType: 'Bearer' as const, expiresIn: r.expiresIn, language: r.language }
 }
 
-const AuthResultData = z.object({ admin: AdminOut, tokens: TokenResponse }).openapi('AdminAuthResult')
+/**
+ * Browser (cookie) clients never need tokens in the body; curl/tests opt in
+ * via this header. Keeps the response body lean while preserving a raw-token
+ * escape hatch for tooling that can't read httpOnly cookies.
+ */
+function includeTokens(c: AppContext): boolean {
+  return c.req.header('X-Auth-Include-Tokens') === '1'
+}
+
+const AuthResultData = z.object({ admin: AdminOut, tokens: TokenResponse.nullable() }).openapi('AdminAuthResult')
 const LoginResponseData = z.union([AuthResultData, AdminLoginChallengeData]).openapi('AdminLoginResponse')
+/** Loose refresh body — both fields optional; the handler falls back to the `admin_refresh` cookie. */
+const AdminRefreshRequest = z
+  .object({ refreshToken: z.string().optional(), refresh_token: z.string().optional() })
+  .openapi('AdminRefreshRequest')
 const errs = {
   401: { description: 'Invalid credentials', content: { 'application/json': { schema: ErrorEnvelope } } },
   422: { description: 'Validation error', content: { 'application/json': { schema: ErrorEnvelope } } },
@@ -67,7 +88,8 @@ admins.openapi(
     if ('otpRequired' in r) {
       return c.json(ok(c, 'OTP verification required', r), 200)
     }
-    return c.json(ok(c, 'Login successful', { admin: r.admin, tokens: tokens(r) }), 200)
+    setAdminSessionCookies(c, r)
+    return c.json(ok(c, 'Login successful', { admin: r.admin, tokens: includeTokens(c) ? tokens(r) : null }), 200)
   },
 )
 
@@ -91,7 +113,8 @@ admins.openapi(
       code: body.code,
       device: deviceFrom(c),
     })
-    return c.json(ok(c, 'Login successful', { admin: r.admin, tokens: tokens(r) }), 200)
+    setAdminSessionCookies(c, r)
+    return c.json(ok(c, 'Login successful', { admin: r.admin, tokens: includeTokens(c) ? tokens(r) : null }), 200)
   },
 )
 
@@ -100,15 +123,20 @@ admins.openapi(
     method: 'post',
     path: '/refresh',
     tags: ['Admins'],
-    request: { body: { content: { 'application/json': { schema: RefreshRequest } } } },
+    description: 'Reads the refresh token from the request body, or falls back to the admin_refresh cookie.',
+    request: { body: { content: { 'application/json': { schema: AdminRefreshRequest } } } },
     responses: {
-      200: { description: 'Tokens refreshed', content: { 'application/json': { schema: envelopeOf(TokenResponse) } } },
+      200: { description: 'Tokens refreshed', content: { 'application/json': { schema: envelopeOf(TokenResponse.nullable()) } } },
       ...errs,
     },
   }),
   async (c) => {
-    const r = await adminService.refresh(readRefreshToken(c.req.valid('json')), deviceFrom(c))
-    return c.json(ok(c, 'Tokens refreshed successfully', tokens(r)), 200)
+    const body = c.req.valid('json')
+    const presented = body.refreshToken ?? body.refresh_token ?? readAdminRefreshCookie(c)
+    if (!presented) throw authInvalidToken({ reason: 'Missing refresh token' })
+    const r = await adminService.refresh(presented, deviceFrom(c))
+    setAdminSessionCookies(c, r)
+    return c.json(ok(c, 'Tokens refreshed successfully', includeTokens(c) ? tokens(r) : null), 200)
   },
 )
 
@@ -218,6 +246,51 @@ admins.openapi(
     const { code } = c.req.valid('json')
     const result = await adminTotpService.regenerateBackupCodes(p.userId, code)
     return c.json(ok(c, 'Backup codes regenerated', result), 200)
+  },
+)
+
+admins.use('/logout', requireAdmin())
+admins.openapi(
+  createRoute({
+    method: 'post',
+    path: '/logout',
+    tags: ['Admins'],
+    security: [{ bearerAuth: [] }],
+    description: 'Revokes the current session and clears the admin_access/admin_refresh cookies.',
+    responses: {
+      200: { description: 'Logged out', content: { 'application/json': { schema: envelopeOf(z.object({ ok: z.boolean() })) } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorEnvelope } } },
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    await sessions.logoutSession(p.userId, p.sessionId)
+    clearAdminSessionCookies(c)
+    return c.json(ok(c, 'Logged out', { ok: true }), 200)
+  },
+)
+
+admins.use('/change-password', requireAdmin())
+admins.openapi(
+  createRoute({
+    method: 'post',
+    path: '/change-password',
+    tags: ['Admins'],
+    security: [{ bearerAuth: [] }],
+    description:
+      'Change the caller’s own password (verifies currentPassword). Clears mustChangePassword/tempPasswordExpiresAt and revokes every OTHER session. Exempt from the mustChangePassword gate.',
+    request: { body: { content: { 'application/json': { schema: AdminChangePasswordRequest } } } },
+    responses: {
+      200: { description: 'Password changed', content: { 'application/json': { schema: envelopeOf(z.object({ ok: z.boolean() })) } } },
+      401: { description: 'Unauthorized / wrong current password', content: { 'application/json': { schema: ErrorEnvelope } } },
+      422: { description: 'Validation error', content: { 'application/json': { schema: ErrorEnvelope } } },
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const body = c.req.valid('json')
+    await adminService.changePassword(p.userId, body, p.sessionId)
+    return c.json(ok(c, 'Password changed', { ok: true }), 200)
   },
 )
 

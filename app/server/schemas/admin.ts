@@ -55,6 +55,12 @@ export const AdminVerifyOtpRequest = z
   .openapi('AdminVerifyOtpRequest')
 export type AdminVerifyOtpRequest = z.infer<typeof AdminVerifyOtpRequest>
 
+/** `POST /admins/change-password` — verifies the current (often temporary) password, then rotates it. */
+export const AdminChangePasswordRequest = z
+  .object({ currentPassword: z.string().min(1), newPassword: z.string().min(8) })
+  .openapi('AdminChangePasswordRequest')
+export type AdminChangePasswordRequest = z.infer<typeof AdminChangePasswordRequest>
+
 /** `POST /admins/2fa/setup` response: pending secret + QR-ready otpauth URI. */
 export const TotpSetupData = z
   .object({ secret: z.string(), otpauthUri: z.string() })

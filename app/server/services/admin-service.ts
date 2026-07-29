@@ -101,3 +101,24 @@ export async function getProfile(adminId: string): Promise<AdminOut> {
   if (!raw) throw notFound('Admin not found')
   return adminRepo.toAdminOut(raw)
 }
+
+/**
+ * Self-service password change: verifies the current password, stores the new
+ * hash, clears any pending forced-change flags, and revokes every OTHER
+ * session for this admin (the current session that made this call stays
+ * alive). EXEMPT from the (Task 7) mustChangePassword gate.
+ */
+export async function changePassword(
+  adminId: string,
+  payload: { currentPassword: string; newPassword: string },
+  currentSessionId: string,
+): Promise<void> {
+  const raw = await adminRepo.findById(adminId)
+  if (!raw) throw notFound('Admin not found')
+  if (!(await verifyPassword(payload.currentPassword, raw.password))) throw invalidCredentials()
+
+  const hashed = await hashPassword(payload.newPassword)
+  await adminRepo.updatePassword(adminId, hashed)
+  await adminRepo.updateAdmin(adminId, { mustChangePassword: false, tempPasswordExpiresAt: null })
+  await sessions.revokeOtherSessions(adminId, currentSessionId)
+}
