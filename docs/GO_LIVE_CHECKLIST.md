@@ -18,15 +18,32 @@ Repos and their current state (all merged, all suites green):
 Nothing is published yet — every commit is local. Pushing `master` on the
 backend is what triggers the Vercel deploy, so do the env vars in §2 **first**.
 
+Backend — normal push (its history was never rewritten):
+
 ```bash
 git -C "C:\Users\Mr Dashi\Downloads\Marcus-cleaning-backend" push origin master
 ```
+
+Admin frontend — normal push (`origin/master`'s tip is untouched, so this
+fast-forwards):
+
 ```bash
 git -C "C:\Users\Mr Dashi\Downloads\Marcus-cleaning-admin-frontend" push origin master
 ```
+
+Flutter — **force required.** Commit messages were rewritten to strip AI
+co-author trailers, and 12 of those commits had already been pushed, so their
+hashes changed. File contents are byte-identical (verified by comparing tree
+hashes before and after). If anyone else has a clone of this repo, they must
+re-clone or hard-reset after this push.
+
 ```bash
-git -C "C:\flutter_projects\cleaning_app" push origin main
+git -C "C:\flutter_projects\cleaning_app" push --force-with-lease origin main
 ```
+
+Note: `git fetch` on the Flutter remote failed from here with "Repository not
+found" — check that `https://github.com/nathanieluriri/cleaning_app.git` is the
+right URL and that you're authenticated before pushing.
 
 ---
 
