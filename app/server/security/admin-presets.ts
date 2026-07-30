@@ -73,6 +73,12 @@ export interface AdminPreset {
   permissions: string[]
 }
 
+// NOTE: `GET /api/v1/admins` (list admins — the Team page) is intentionally
+// absent from every named preset below. No preset other than `all_controls`
+// currently grants ANY admin-account-management permission (invites, signup,
+// access-preset changes, delete) — the admin list follows that same
+// least-privilege boundary; only a wildcard (`'*'`) holder can see it.
+
 export const ADMIN_PRESETS: Record<string, AdminPreset> = {
   all_controls: {
     label: 'All controls',
