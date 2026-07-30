@@ -121,6 +121,14 @@ const EnvSchema = z
     SUPER_ADMIN_EMAIL: z.string().optional(),
     SUPER_ADMIN_PASSWORD: z.string().optional(),
 
+    // admin 2FA (email OTP mandatory by default; TOTP is the seam Task 3 fills in)
+    ADMIN_OTP_REQUIRED: boolFromEnv(true),
+    /** Dev-only OTP bypass code. Boot refuses to start if this is set in production. */
+    OTP_DEV_CODE: z.string().optional(),
+    ADMIN_COOKIE_DOMAIN: z.string().optional(),
+    /** Login URL embedded in admin invite emails. Falls back to the first CORS origin, then localhost. */
+    ADMIN_LOGIN_URL: z.string().optional(),
+
     // per-role session policy (carried over from FastAPI)
     AUTH_SESSION_MAX_AGE_ADMIN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 12),
     AUTH_SESSION_MAX_AGE_CLEANER_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 7),

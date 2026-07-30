@@ -26,6 +26,11 @@ import {
   ExportIdParam,
   EventIdParam,
   AdminIdParam,
+  AdminInviteRequest,
+  AccessPresetUpdate,
+  AccessPresetBulkUpdate,
+  AccessPresetBulkResult,
+  AccessPresetCatalogOut,
 } from '@/server/schemas/admin-core'
 import { AdminOut } from '@/server/schemas/admin'
 import * as access from '@/server/services/admin-access-service'
@@ -35,6 +40,8 @@ import * as directory from '@/server/services/admin-directory-service'
 import * as monitoring from '@/server/services/admin-monitoring-service'
 import * as reporting from '@/server/services/admin-reporting-service'
 import * as mgmt from '@/server/services/admin-management-service'
+import * as invites from '@/server/services/admin-invite-service'
+import * as adminRepo from '@/server/repositories/admin-repo'
 
 /**
  * /v1/admins — core admin endpoints that are NOT auth (auth lives in admins.ts).
@@ -83,6 +90,11 @@ const GUARDED = [
   '/cleaners/:cleaner_id',
   '/users/autocomplete',
   '/signup',
+  '/invites',
+  '/invites/:admin_id/resend',
+  '/access-presets',
+  '/access-presets/bulk',
+  '/:admin_id/access-preset',
   '/monitoring/overview',
   '/monitoring/auth/heatmap',
   '/monitoring/permissions/denied-top',
@@ -429,6 +441,8 @@ adminCore.openapi(
     method: 'post',
     path: '/signup',
     tags: [TAG],
+    deprecated: true,
+    description: 'Deprecated — use POST /admins/invites instead. Directly creates an admin with a caller-supplied password; the invite flow issues a temp password and forces a change on first login.',
     security: [{ bearerAuth: [] }],
     request: { body: { content: { 'application/json': { schema: AdminCreateSignup } } } },
     responses: {
@@ -441,6 +455,100 @@ adminCore.openapi(
     principalOf(c)
     const created = await mgmt.signup(c.req.valid('json'))
     return c.json(ok(c, 'Admin created', created), 201)
+  },
+)
+
+// ============================ invites ============================
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/invites',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: AdminInviteRequest } } } },
+    responses: {
+      201: { description: 'Admin invited', content: { 'application/json': { schema: envelopeOf(AdminOut) } } },
+      409: { description: 'Email already exists', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...errs,
+    },
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { email, fullName, accessPreset } = c.req.valid('json')
+    // Resolve the caller's display name (not their ObjectId) for the
+    // "invited by" line in the invite email — findById returns null only in
+    // pathological cases (deleted mid-request), so fall back to no name.
+    const caller = await adminRepo.findById(p.userId)
+    const invitedByName = caller ? `${caller.firstName} ${caller.lastName}`.trim() : null
+    const created = await invites.invite({ email, fullName, accessPreset, invitedBy: invitedByName })
+    return c.json(ok(c, 'Admin invited', created), 201)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/invites/{admin_id}/resend',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: AdminIdParam },
+    responses: {
+      409: { description: 'Admin already activated', content: { 'application/json': { schema: ErrorEnvelope } } },
+      ...jsonOk(AdminOut),
+    },
+  }),
+  async (c) => {
+    principalOf(c)
+    const { admin_id } = c.req.valid('param')
+    const updated = await invites.resend(admin_id)
+    return c.json(ok(c, 'Invite resent', updated), 200)
+  },
+)
+
+// ============================ access presets ============================
+
+adminCore.openapi(
+  createRoute({ method: 'get', path: '/access-presets', tags: [TAG], security: [{ bearerAuth: [] }], responses: jsonOk(AccessPresetCatalogOut) }),
+  async (c) => {
+    principalOf(c)
+    const items = mgmt.listAccessPresets()
+    return c.json(ok(c, 'Access presets', { items }), 200)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'post',
+    path: '/access-presets/bulk',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: AccessPresetBulkUpdate } } } },
+    responses: jsonOk(AccessPresetBulkResult),
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { adminIds, preset } = c.req.valid('json')
+    const r = await mgmt.bulkSetAccessPreset({ callerId: p.userId, adminIds, preset })
+    return c.json(ok(c, 'Access presets updated', r), 200)
+  },
+)
+
+adminCore.openapi(
+  createRoute({
+    method: 'patch',
+    path: '/{admin_id}/access-preset',
+    tags: [TAG],
+    security: [{ bearerAuth: [] }],
+    request: { params: AdminIdParam, body: { content: { 'application/json': { schema: AccessPresetUpdate } } } },
+    responses: jsonOk(AdminOut),
+  }),
+  async (c) => {
+    const p = principalOf(c)
+    const { admin_id } = c.req.valid('param')
+    const { preset } = c.req.valid('json')
+    const r = await mgmt.setAccessPreset({ callerId: p.userId, targetId: admin_id, preset })
+    return c.json(ok(c, 'Access preset updated', r), 200)
   },
 )
 

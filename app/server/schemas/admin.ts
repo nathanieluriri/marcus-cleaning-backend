@@ -31,11 +31,69 @@ export const AdminOut = z
     isSuperAdmin: z.boolean().default(false),
     permissionList: z.array(z.string()).default([]),
     preferredLanguage: PreferredLanguage.default('en'),
+    accessPreset: z.string().nullable().default(null),
+    mustChangePassword: z.boolean().default(false),
+    totpEnabled: z.boolean().default(false),
     dateCreated: z.number().int().nullable().default(null),
     lastUpdated: z.number().int().nullable().default(null),
   })
   .openapi('AdminOut')
 export type AdminOut = z.infer<typeof AdminOut>
+
+/** `POST /admins/login` response when `ADMIN_OTP_REQUIRED` is true: no tokens, no profile — just enough to drive the OTP step. */
+export const AdminLoginChallengeData = z
+  .object({
+    otpRequired: z.literal(true),
+    otpChallengeId: z.string(),
+    method: z.enum(['email', 'totp']),
+  })
+  .openapi('AdminLoginChallengeData')
+export type AdminLoginChallengeData = z.infer<typeof AdminLoginChallengeData>
+
+export const AdminVerifyOtpRequest = z
+  .object({ challengeId: z.string().min(1), code: z.string().min(1) })
+  .openapi('AdminVerifyOtpRequest')
+export type AdminVerifyOtpRequest = z.infer<typeof AdminVerifyOtpRequest>
+
+/** `POST /admins/change-password` — verifies the current (often temporary) password, then rotates it. */
+export const AdminChangePasswordRequest = z
+  .object({ currentPassword: z.string().min(1), newPassword: z.string().min(8) })
+  .openapi('AdminChangePasswordRequest')
+export type AdminChangePasswordRequest = z.infer<typeof AdminChangePasswordRequest>
+
+/** `POST /admins/2fa/setup` response: pending secret + QR-ready otpauth URI. */
+export const TotpSetupData = z
+  .object({ secret: z.string(), otpauthUri: z.string() })
+  .openapi('TotpSetupData')
+export type TotpSetupData = z.infer<typeof TotpSetupData>
+
+/**
+ * `POST /admins/2fa/setup` request. `code` is required for RE-enrollment (an
+ * admin who already has `totpEnabledAt` set) — proves control of the current
+ * factor (live TOTP or a backup code) before a new pending secret can be
+ * issued. Omit entirely for fresh (first-time) enrollment.
+ */
+export const TotpSetupRequest = z
+  .object({ code: z.string().min(1).optional() })
+  .openapi('TotpSetupRequest')
+export type TotpSetupRequest = z.infer<typeof TotpSetupRequest>
+
+export const TotpVerifyRequest = z.object({ code: z.string().min(1) }).openapi('TotpVerifyRequest')
+export type TotpVerifyRequest = z.infer<typeof TotpVerifyRequest>
+
+/** Backup codes returned in plaintext exactly once, on enrollment/regeneration. */
+export const TotpBackupCodesData = z
+  .object({ backupCodes: z.array(z.string()) })
+  .openapi('TotpBackupCodesData')
+export type TotpBackupCodesData = z.infer<typeof TotpBackupCodesData>
+
+export const TotpDisableRequest = z.object({ code: z.string().min(1) }).openapi('TotpDisableRequest')
+export type TotpDisableRequest = z.infer<typeof TotpDisableRequest>
+
+export const TotpRegenerateBackupCodesRequest = z
+  .object({ code: z.string().min(1) })
+  .openapi('TotpRegenerateBackupCodesRequest')
+export type TotpRegenerateBackupCodesRequest = z.infer<typeof TotpRegenerateBackupCodesRequest>
 
 export interface AdminDoc {
   firstName: string
@@ -49,6 +107,20 @@ export interface AdminDoc {
   authProvider?: string | null
   authSubject?: string | null
   lastAuthAt?: number | null
+  /** Named access preset applied to this admin (e.g. 'support', 'finance'); null when using raw permissionList only. */
+  accessPreset?: string | null
+  /** True when the admin must change their password before continuing (e.g. after invite/reset). */
+  mustChangePassword?: boolean
+  /** Epoch seconds after which a temporary password is no longer valid. */
+  tempPasswordExpiresAt?: number | null
+  /** Base32 TOTP secret, set once enrollment is confirmed. Never exposed via AdminOut. */
+  totpSecret?: string | null
+  /** Base32 TOTP secret awaiting confirmation (between /2fa/setup and /2fa/verify). */
+  totpPendingSecret?: string | null
+  /** Epoch seconds when TOTP was confirmed enabled; null/undefined means disabled. */
+  totpEnabledAt?: number | null
+  /** sha256 hashes of unused backup codes. Never exposed via AdminOut. */
+  backupCodes?: string[]
   dateCreated: number
   lastUpdated: number
 }

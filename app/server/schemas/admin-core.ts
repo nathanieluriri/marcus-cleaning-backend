@@ -83,6 +83,53 @@ export const AdminCreateSignup = z
   .openapi('AdminCreateSignup')
 export type AdminCreateSignup = z.infer<typeof AdminCreateSignup>
 
+// --- access presets ---
+export const AccessPresetUpdate = z
+  .object({ preset: z.string().min(1) })
+  .openapi('AdminAccessPresetUpdate')
+export type AccessPresetUpdate = z.infer<typeof AccessPresetUpdate>
+
+export const AccessPresetBulkUpdate = z
+  .object({
+    adminIds: z.array(z.string().min(1)).min(1),
+    preset: z.string().min(1),
+  })
+  .openapi('AdminAccessPresetBulkUpdate')
+export type AccessPresetBulkUpdate = z.infer<typeof AccessPresetBulkUpdate>
+
+export const AccessPresetBulkResult = z
+  .object({
+    updated: z.number().int(),
+    skipped: z.array(z.object({ id: z.string(), reason: z.string() })),
+  })
+  .openapi('AdminAccessPresetBulkResult')
+export type AccessPresetBulkResult = z.infer<typeof AccessPresetBulkResult>
+
+export const AccessPresetCatalogItem = z
+  .object({
+    key: z.string(),
+    label: z.string(),
+    description: z.string(),
+    permissionCount: z.number().int(),
+  })
+  .openapi('AdminAccessPresetCatalogItem')
+export type AccessPresetCatalogItem = z.infer<typeof AccessPresetCatalogItem>
+
+export const AccessPresetCatalogOut = z
+  .object({ items: z.array(AccessPresetCatalogItem) })
+  .openapi('AdminAccessPresetCatalogOut')
+export type AccessPresetCatalogOut = z.infer<typeof AccessPresetCatalogOut>
+
+// --- invites ---
+export const AdminInviteRequest = z
+  .object({
+    email: z.email(),
+    fullName: z.string().min(1),
+    accessPreset: z.string().min(1),
+  })
+  .openapi('AdminInviteRequest')
+export type AdminInviteRequest = z.infer<typeof AdminInviteRequest>
+
 // --- audit export ---
 export const AuditExportRequest = z
   .object({
