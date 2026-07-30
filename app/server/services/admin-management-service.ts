@@ -37,6 +37,17 @@ export async function signup(payload: AdminCreateSignup): Promise<AdminOut> {
   })
 }
 
+export interface AdminListResult {
+  items: AdminOut[]
+  total: number
+}
+
+/** Paginated admin listing (Team page). Every item goes through `toAdminOut` — never leaks password/totpSecret/backupCodes. */
+export async function listAdmins(args: { limit?: number; skip?: number }): Promise<AdminListResult> {
+  const { items, total } = await adminRepo.listAdmins(args)
+  return { items: items.map((doc) => adminRepo.toAdminOut(doc)), total }
+}
+
 export async function getLanguage(adminId: string): Promise<'en' | 'fr'> {
   const lang = await adminMgmtRepo.getLanguage(adminId)
   if (lang === null) throw notFound('Admin not found')

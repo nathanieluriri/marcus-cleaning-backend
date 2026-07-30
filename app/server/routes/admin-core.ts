@@ -89,6 +89,7 @@ const GUARDED = [
   '/onboarding/queue',
   '/cleaners/:cleaner_id',
   '/users/autocomplete',
+  '/',
   '/signup',
   '/invites',
   '/invites/:admin_id/resend',
@@ -431,6 +432,18 @@ adminCore.openapi(
     const { q, search, limit } = c.req.valid('query')
     const items = await directory.autocompleteUsers({ search: q ?? search ?? '', limit })
     return c.json(ok(c, 'User autocomplete', { items, total: items.length }), 200)
+  },
+)
+
+// ============================ admins directory ============================
+
+adminCore.openapi(
+  createRoute({ method: 'get', path: '/', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AdminListQuery }, responses: jsonOk(GenericList) }),
+  async (c) => {
+    principalOf(c)
+    const { limit, skip } = c.req.valid('query')
+    const r = await mgmt.listAdmins({ limit, skip })
+    return c.json(ok(c, 'Admins listed', r), 200)
   },
 )
 
