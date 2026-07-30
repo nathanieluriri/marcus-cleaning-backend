@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
 /**
  * Password hashing (bcrypt) + refresh-token hashing (sha256).
@@ -27,4 +27,17 @@ export function generateRefreshToken(): string {
 
 export function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+/**
+ * Constant-time string comparison. Ordinary `===`/hash comparisons short-circuit
+ * on the first differing byte, which leaks a timing signal an attacker can use
+ * to recover a secret one character at a time — unacceptable for OTP/TOTP/dev-code
+ * comparisons even though the underlying values are short-lived.
+ */
+export function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8')
+  const bufB = Buffer.from(b, 'utf8')
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
 }

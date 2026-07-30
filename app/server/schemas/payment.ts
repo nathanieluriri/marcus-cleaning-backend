@@ -157,3 +157,13 @@ export type ReconcileResult = z.infer<typeof ReconcileResult>
 /** List wrapper for payment methods. */
 export const PaymentMethodList = z.object({ items: z.array(PaymentMethodOut) }).openapi('PaymentMethodList')
 export type PaymentMethodList = z.infer<typeof PaymentMethodList>
+
+/** Public, unguarded payment-provider configuration for clients. */
+export const PaymentConfigOut = z
+  .object({
+    defaultProvider: z.enum(['stripe', 'flutterwave', 'test']),
+    providers: z.array(z.string()),
+    publishableKey: z.string().nullable(),
+  })
+  .openapi('PaymentConfigOut')
+export type PaymentConfigOut = z.infer<typeof PaymentConfigOut>

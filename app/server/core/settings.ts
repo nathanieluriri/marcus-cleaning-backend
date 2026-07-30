@@ -62,6 +62,7 @@ const EnvSchema = z
     PAYMENT_DEFAULT_PROVIDER: z.enum(['flutterwave', 'stripe', 'test']).default('test'),
     STRIPE_SECRET_KEY: z.string().optional(),
     STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    STRIPE_PUBLISHABLE_KEY: z.string().optional(),
     FLUTTERWAVE_SECRET_KEY: z.string().optional(),
     FLW_WEBHOOK_SECRET_HASH: z.string().optional(),
     TEST_PAYMENT_BASE_URL: z.string().optional(),
@@ -119,6 +120,14 @@ const EnvSchema = z
     PAYMENT_RECONCILE_POLL_LIMIT: z.coerce.number().int().positive().default(50),
     SUPER_ADMIN_EMAIL: z.string().optional(),
     SUPER_ADMIN_PASSWORD: z.string().optional(),
+
+    // admin 2FA (email OTP mandatory by default; TOTP is the seam Task 3 fills in)
+    ADMIN_OTP_REQUIRED: boolFromEnv(true),
+    /** Dev-only OTP bypass code. Boot refuses to start if this is set in production. */
+    OTP_DEV_CODE: z.string().optional(),
+    ADMIN_COOKIE_DOMAIN: z.string().optional(),
+    /** Login URL embedded in admin invite emails. Falls back to the first CORS origin, then localhost. */
+    ADMIN_LOGIN_URL: z.string().optional(),
 
     // per-role session policy (carried over from FastAPI)
     AUTH_SESSION_MAX_AGE_ADMIN_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 12),

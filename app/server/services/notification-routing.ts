@@ -41,8 +41,7 @@ export type NotificationChannel = (typeof NotificationChannel)[keyof typeof Noti
  * Android takes its sound from the channel instead, so this is iOS-only.
  */
 export const NotificationSound = {
-  SWEEPING: 'sweeping.caf',
-  MOPPING: 'mopping.caf',
+  NOTIFICATION: 'notification.caf',
   DEFAULT: 'default',
 } as const
 export type NotificationSound = (typeof NotificationSound)[keyof typeof NotificationSound]
@@ -87,7 +86,7 @@ const ROUTING: Record<string, RoutingEntry> = {
   // --- bookings + jobs ---
   'booking.created': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     cleanerRoute: '/jobs/request/:bookingId',
     entityType: 'booking',
@@ -95,7 +94,7 @@ const ROUTING: Record<string, RoutingEntry> = {
   },
   'booking.cancelled': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     // Deliberately NOT /jobs/request/:id — that screen offers accept/decline on
     // a job that no longer exists.
@@ -105,7 +104,7 @@ const ROUTING: Record<string, RoutingEntry> = {
   },
   'booking.rescheduled': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     cleanerRoute: '/calendar',
     entityType: 'booking',
@@ -113,21 +112,21 @@ const ROUTING: Record<string, RoutingEntry> = {
   },
   'job.en_route': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     entityType: 'booking',
     entityIdKey: 'bookingId',
   },
   'job.started': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     entityType: 'booking',
     entityIdKey: 'bookingId',
   },
   'job.completed': {
     channelId: NotificationChannel.JOBS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/bookings/:bookingId',
     entityType: 'booking',
     entityIdKey: 'bookingId',
@@ -136,10 +135,9 @@ const ROUTING: Record<string, RoutingEntry> = {
   // --- chat ---
   'chat.message': {
     channelId: NotificationChannel.CHAT,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/chat/:conversationId',
-    // The staff app has no chat screen yet; it opens the app until one exists.
-    cleanerRoute: null,
+    cleanerRoute: '/chat/:conversationId',
     entityType: 'conversation',
     entityIdKey: 'conversationId',
     // Twenty messages must not produce twenty tray entries.
@@ -149,21 +147,21 @@ const ROUTING: Record<string, RoutingEntry> = {
   // --- money ---
   'payout.requested': {
     channelId: NotificationChannel.PAYOUTS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/earnings',
     entityType: 'payout',
     entityIdKey: 'payoutId',
   },
   'payout.paid': {
     channelId: NotificationChannel.PAYOUTS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/earnings',
     entityType: 'payout',
     entityIdKey: 'payoutId',
   },
   'payout.failed': {
     channelId: NotificationChannel.PAYOUTS,
-    sound: NotificationSound.SWEEPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/earnings',
     entityType: 'payout',
     entityIdKey: 'payoutId',
@@ -227,7 +225,7 @@ const ROUTING: Record<string, RoutingEntry> = {
   },
   'promo.broadcast': {
     channelId: NotificationChannel.PROMOS,
-    sound: NotificationSound.MOPPING,
+    sound: NotificationSound.NOTIFICATION,
     route: '/home',
     entityType: 'promotion',
     entityIdKey: 'promoId',

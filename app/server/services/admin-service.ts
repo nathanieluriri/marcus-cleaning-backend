@@ -2,6 +2,7 @@ import { AppError, notFound } from '@/server/core/errors'
 import { getSettings } from '@/server/core/settings'
 import { hashPassword, verifyPassword } from '@/server/security/hash'
 import * as adminRepo from '@/server/repositories/admin-repo'
+import * as otpService from './admin-otp-service'
 import * as sessions from './auth-session-service'
 import type { DeviceInfo } from './auth-session-service'
 import type { AdminLogin, AdminOut } from '@/server/schemas/admin'
@@ -20,7 +21,18 @@ export interface AdminAuthResult {
   language: 'en' | 'fr'
 }
 
+/** `POST /admins/login` response when 2FA is required: no tokens, no profile. */
+export interface AdminLoginChallenge {
+  otpRequired: true
+  otpChallengeId: string
+  method: 'email' | 'totp'
+}
+
+export type AdminLoginOutcome = AdminAuthResult | AdminLoginChallenge
+
 const invalidCredentials = () => new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password')
+const tempPasswordExpired = () =>
+  new AppError(401, 'TEMP_PASSWORD_EXPIRED', 'Temporary password has expired; request a new invite or reset')
 const nowEpoch = () => Math.floor(Date.now() / 1000)
 
 /**
@@ -48,11 +60,25 @@ async function bootstrapSuperAdmin(email: string): Promise<void> {
   })
 }
 
-export async function login(payload: AdminLogin, device: DeviceInfo): Promise<AdminAuthResult> {
+export async function login(payload: AdminLogin, device: DeviceInfo): Promise<AdminLoginOutcome> {
   await bootstrapSuperAdmin(payload.email)
   const raw = await adminRepo.findByEmail(payload.email.toLowerCase())
   if (!raw) throw invalidCredentials()
   if (!(await verifyPassword(payload.password, raw.password))) throw invalidCredentials()
+  if (raw.mustChangePassword && raw.tempPasswordExpiresAt != null && raw.tempPasswordExpiresAt < nowEpoch()) {
+    throw tempPasswordExpired()
+  }
+
+  const adminId = String(raw._id)
+  if (getSettings().ADMIN_OTP_REQUIRED) {
+    const challenge = await otpService.createChallenge({
+      id: adminId,
+      email: raw.email,
+      totpEnabledAt: raw.totpEnabledAt,
+    })
+    return { otpRequired: true, otpChallengeId: challenge.challengeId, method: challenge.method }
+  }
+
   const admin = adminRepo.toAdminOut(raw)
   await adminRepo.updateLastAuthAt(admin.id, nowEpoch())
   const issued = await sessions.issueSession({ userId: admin.id, role: 'admin', device })
@@ -74,4 +100,25 @@ export async function getProfile(adminId: string): Promise<AdminOut> {
   const raw = await adminRepo.findById(adminId)
   if (!raw) throw notFound('Admin not found')
   return adminRepo.toAdminOut(raw)
+}
+
+/**
+ * Self-service password change: verifies the current password, stores the new
+ * hash, clears any pending forced-change flags, and revokes every OTHER
+ * session for this admin (the current session that made this call stays
+ * alive). EXEMPT from the (Task 7) mustChangePassword gate.
+ */
+export async function changePassword(
+  adminId: string,
+  payload: { currentPassword: string; newPassword: string },
+  currentSessionId: string,
+): Promise<void> {
+  const raw = await adminRepo.findById(adminId)
+  if (!raw) throw notFound('Admin not found')
+  if (!(await verifyPassword(payload.currentPassword, raw.password))) throw invalidCredentials()
+
+  const hashed = await hashPassword(payload.newPassword)
+  await adminRepo.updatePassword(adminId, hashed)
+  await adminRepo.updateAdmin(adminId, { mustChangePassword: false, tempPasswordExpiresAt: null })
+  await sessions.revokeOtherSessions(adminId, currentSessionId)
 }

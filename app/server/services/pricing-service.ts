@@ -1,5 +1,6 @@
 import * as generic from '@/server/repositories/admin-features/_generic-repo'
 import type { BookingAddon } from '@/server/schemas/booking'
+import { AppError } from '@/server/core/errors'
 
 /**
  * Pricing — backend-authoritative quote computation.
@@ -38,19 +39,71 @@ export interface AddonItem {
 }
 
 /**
+ * Validate `hours` against a service's hourly pricing config and return the
+ * computed base price. Float-safe increment check: rounds the number of
+ * increment-steps rather than comparing the raw modulo, so 2.7 - 2 = 0.7 over
+ * a 0.5 increment (1.4 steps) correctly fails while binary-float noise (e.g.
+ * 0.1 + 0.2 !== 0.3) does not cause false negatives.
+ */
+function priceHourly(
+  service: Record<string, unknown>,
+  hours: number,
+): number {
+  const hourlyRate = num(service.hourlyRate ?? service.ratePerHour ?? service.pricePerHour)
+  const minimumHours = num(service.minimumHours ?? service.minHours) ?? 1
+  const maximumHours = num(service.maximumHours ?? service.maxHours)
+  const hourIncrement = num(service.hourIncrement ?? service.durationStepHours) ?? 0.5
+
+  if (hourlyRate == null) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'Service is not hourly-priced', {
+      minimumHours,
+      maximumHours,
+      hourIncrement,
+    })
+  }
+
+  const steps = (hours - minimumHours) / hourIncrement
+  const roundedHours = Math.round(steps) * hourIncrement + minimumHours
+  const onIncrement = Math.abs(roundedHours - hours) < 1e-6
+
+  if (hours < minimumHours || (maximumHours != null && hours > maximumHours) || !onIncrement) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'Invalid booking duration', {
+      minimumHours,
+      maximumHours,
+      hourIncrement,
+    })
+  }
+
+  return hourlyRate * hours
+}
+
+/**
  * Compute a price quote from a service id + add-on items. Unknown service or
  * add-on ids contribute 0 (the catalog is the source of truth; missing prices
  * are treated as free rather than erroring, so a quote always resolves).
+ *
+ * `hours` — when provided, the service MUST be hourly-priced and `hours` must
+ * satisfy its minimum/maximum/increment constraints (422 otherwise). When
+ * omitted, pricing falls back to the flat `basePrice ?? price` (today's
+ * behavior), unchanged.
  */
-export async function computeQuote(serviceId: string | null, addonItems: AddonItem[]): Promise<Quote> {
+export async function computeQuote(
+  serviceId: string | null,
+  addonItems: AddonItem[],
+  hours?: number | null,
+): Promise<Quote> {
   let base = 0
   let currency = DEFAULT_CURRENCY
 
   if (serviceId) {
     const service = await generic.getDocById(SERVICE_DEFS, serviceId)
     if (service) {
-      base = num(service.basePrice ?? service.price) ?? 0
       currency = str(service.currency, DEFAULT_CURRENCY)
+      if (hours != null) {
+        base = priceHourly(service, hours)
+      } else {
+        base = num(service.basePrice ?? service.price) ?? 0
+      }
     }
   }
 
@@ -76,9 +129,10 @@ export async function computeQuote(serviceId: string | null, addonItems: AddonIt
 export async function quoteForBooking(booking: {
   serviceId?: string | null
   addons?: BookingAddon[] | null
+  hours?: number | null
 }): Promise<Quote> {
   const items: AddonItem[] = (booking.addons ?? []).map((a) => ({ addonId: a.addonId, quantity: a.quantity }))
-  return computeQuote(booking.serviceId ?? null, items)
+  return computeQuote(booking.serviceId ?? null, items, booking.hours ?? null)
 }
 
 /** Convert a major-unit amount to integer minor units (e.g. 45.5 -> 4550). */

@@ -69,6 +69,7 @@ export interface CustomerDoc {
   authProvider?: string | null
   authSubject?: string | null
   lastAuthAt?: number | null
+  favoriteCleanerIds?: string[]
   dateCreated: number
   lastUpdated: number
 }

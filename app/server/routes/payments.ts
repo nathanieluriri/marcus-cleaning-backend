@@ -4,8 +4,10 @@ import { ok, envelopeOf, ErrorEnvelope } from '@/server/core/envelope'
 import type { AppContext } from '@/server/core/http-env'
 import { requireCustomer, principalOf } from '@/server/security/guards'
 import { getProviderByName } from '@/server/core/payments/manager'
+import { getSettings } from '@/server/core/settings'
 import * as paymentService from '@/server/services/payment-service'
 import {
+  PaymentConfigOut,
   PaymentCreatedOut,
   PaymentCreateRequest,
   PaymentMethodCreate,
@@ -49,6 +51,37 @@ payments.post('/webhooks/:provider', async (c) => {
   await paymentService.applyWebhookEvent(event)
   return c.text('OK', 200)
 })
+
+// --- GET /config — PUBLIC, no guard. Exposes only non-secret provider info. ---
+// Registered before the customer-guarded routes so it never falls through to
+// `/{payment_id}` (which would treat "config" as an id) or requires auth.
+payments.openapi(
+  createRoute({
+    method: 'get',
+    path: '/config',
+    tags: ['Payments'],
+    responses: {
+      200: {
+        description: 'Payment provider configuration',
+        content: { 'application/json': { schema: envelopeOf(PaymentConfigOut) } },
+      },
+    },
+  }),
+  async (c) => {
+    const s = getSettings()
+    const providers = ['test']
+    if (s.STRIPE_SECRET_KEY) providers.push('stripe')
+    if (s.FLUTTERWAVE_SECRET_KEY) providers.push('flutterwave')
+    return c.json(
+      ok(c, 'Payment config retrieved successfully', {
+        defaultProvider: s.PAYMENT_DEFAULT_PROVIDER,
+        providers,
+        publishableKey: s.STRIPE_PUBLISHABLE_KEY ?? null,
+      }),
+      200,
+    )
+  },
+)
 
 // --- POST / — create a payment for a booking (customer-guarded) ---
 // Registered before the `/:payment_id` guards below; `/` matches the root only.

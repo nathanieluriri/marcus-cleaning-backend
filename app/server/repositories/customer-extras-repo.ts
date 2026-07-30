@@ -90,3 +90,27 @@ export async function setAccountStatus(
   const updated = await findRaw(id)
   return updated ? toOut(updated) : null
 }
+
+/** Ids of cleaners this customer has favorited. */
+export async function getFavoriteCleanerIds(id: string): Promise<string[]> {
+  const doc = (await collection().findOne(idFilter(id), {
+    projection: { favoriteCleanerIds: 1 },
+  })) as (WithId<CustomerDoc> & { favoriteCleanerIds?: string[] }) | null
+  return doc?.favoriteCleanerIds ?? []
+}
+
+/** Add a cleaner to the customer's favorites (idempotent — set semantics). */
+export async function addFavorite(id: string, cleanerId: string): Promise<void> {
+  await collection().updateOne(idFilter(id), {
+    $addToSet: { favoriteCleanerIds: cleanerId },
+    $set: { lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}
+
+/** Remove a cleaner from the customer's favorites (idempotent). */
+export async function removeFavorite(id: string, cleanerId: string): Promise<void> {
+  await collection().updateOne(idFilter(id), {
+    $pull: { favoriteCleanerIds: cleanerId },
+    $set: { lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}

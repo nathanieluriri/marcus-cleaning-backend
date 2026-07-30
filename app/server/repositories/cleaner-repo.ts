@@ -87,6 +87,44 @@ export async function updateLastAuthAt(id: string, epochSeconds: number): Promis
   await collection().updateOne(idFilter(id), { $set: { lastAuthAt: epochSeconds, lastUpdated: epochSeconds } })
 }
 
+/** Set a new bcrypt password hash for a cleaner. */
+export async function updatePassword(id: string, passwordHash: string): Promise<void> {
+  await ensureIndexes()
+  await collection().updateOne(idFilter(id), {
+    $set: { password: passwordHash, lastUpdated: Math.floor(Date.now() / 1000) },
+  })
+}
+
+/**
+ * Read the embedded `settings` object (notifications prefs, etc).
+ * Stored as a sub-document on the cleaner; absent on legacy docs.
+ */
+export async function getSettings(id: string): Promise<Record<string, unknown> | null> {
+  const doc = (await collection().findOne(idFilter(id), {
+    projection: { settings: 1 },
+  })) as (WithId<CleanerDoc> & { settings?: Record<string, unknown> }) | null
+  return doc?.settings ?? null
+}
+
+/**
+ * Deep-merge a partial settings sub-document under a named section
+ * (currently only `notifications`) using dotted `$set` keys so sibling
+ * sections/keys are preserved. Keeps `settings.notifications.marketing`
+ * queryable by `listMarketingOptOutIds`.
+ */
+export async function updateSettingsSection(
+  id: string,
+  section: 'notifications',
+  patch: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  const set: Record<string, unknown> = { lastUpdated: Math.floor(Date.now() / 1000) }
+  for (const [k, v] of Object.entries(patch)) {
+    set[`settings.${section}.${k}`] = v
+  }
+  await collection().updateOne(idFilter(id), { $set: set })
+  return getSettings(id)
+}
+
 export function toCleanerOut(doc: unknown): CleanerOutType {
   return CleanerOut.parse(fromDoc(doc))
 }

@@ -2,6 +2,7 @@ import { cors } from 'hono/cors'
 import { requestId } from 'hono/request-id'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { getSettings, isProduction } from './core/settings'
+import { assertProductionPosture } from './core/security-posture'
 import { fail } from './core/envelope'
 import { AppError } from './core/errors'
 import { translate, locale } from './core/i18n'
@@ -9,6 +10,7 @@ import { timing } from './core/request-context'
 import { rateLimit } from './core/rate-limit'
 import { mountDocs } from './core/openapi'
 import { createRouter } from './core/router'
+import { adminPermissionGuard, bannerPermissionGuard } from './security/admin-permission-guard'
 
 import { health } from './routes/health'
 import { customers } from './routes/customers'
@@ -51,6 +53,10 @@ function allowedOrigins(): string[] {
   return raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
+// Refuse to boot with an unsafe combination of settings (e.g. OTP_DEV_CODE
+// left set in production). Runs once at module init, before any request.
+assertProductionPosture()
+
 export const app = createRouter()
 
 // --- global middleware (order matters) ---
@@ -77,6 +83,12 @@ app.use('/api/*', async (c, next) => {
 })
 app.use('/api/*', locale())
 app.use('/api/*', rateLimit())
+// Mount-level admin auth + permission enforcement — MUST run before the admin
+// routers (Task 7). See security/admin-permission-guard.ts.
+app.use('/api/v1/admins/*', adminPermissionGuard())
+// Banner writes live outside the /admins mount but still need permission
+// enforcement (GET stays public — see bannerPermissionGuard doc-comment).
+app.use('/api/v1/banners/*', bannerPermissionGuard())
 
 // --- routers ---
 app.route('/api/v1/customers', customers)
