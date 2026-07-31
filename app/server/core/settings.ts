@@ -18,6 +18,14 @@ const boolFromEnv = (def: boolean) =>
     .optional()
     .transform((v) => (v === undefined ? def : v.toLowerCase() === 'true'))
 
+/**
+ * Built-in EMAIL_FROM placeholder. A real deployment MUST override it — Resend
+ * rejects a sender on an unverified domain, so leaving this in place means every
+ * transactional email (including the admin login OTP) fails. `/api/health`
+ * reports it as "not configured" for exactly that reason.
+ */
+export const DEFAULT_EMAIL_FROM = 'Marcus Cleaning <no-reply@example.com>'
+
 const EnvSchema = z
   .object({
     // runtime
@@ -56,7 +64,7 @@ const EnvSchema = z
     // email (Resend)
     RESEND_API_KEY: z.string().optional(),
     RESEND_WEBHOOK_SECRET: z.string().optional(),
-    EMAIL_FROM: z.string().default('Marcus Cleaning <no-reply@example.com>'),
+    EMAIL_FROM: z.string().default(DEFAULT_EMAIL_FROM),
 
     // payments
     PAYMENT_DEFAULT_PROVIDER: z.enum(['flutterwave', 'stripe', 'test']).default('test'),

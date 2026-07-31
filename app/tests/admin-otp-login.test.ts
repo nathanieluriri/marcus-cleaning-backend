@@ -335,6 +335,103 @@ describe('admin login — OTP challenge lifecycle', () => {
   })
 })
 
+describe('admin login — OTP email delivery failure', () => {
+  /** What the user actually hits on Vercel: RESEND_API_KEY absent → getResend() throws. */
+  const providerFailure = () => new Error('RESEND_API_KEY is not configured; cannot send email')
+
+  it('surfaces OTP_EMAIL_FAILED/502 instead of an opaque 500', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(sendOtpEmail).mockRejectedValueOnce(providerFailure())
+
+    await expect(adminService.login({ email: admin.email, password: PASSWORD }, device)).rejects.toMatchObject({
+      code: 'OTP_EMAIL_FAILED',
+      httpStatus: 502,
+    })
+
+    errSpy.mockRestore()
+  })
+
+  it('logs the underlying provider error so it lands in the platform logs', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const cause = providerFailure()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(sendOtpEmail).mockRejectedValueOnce(cause)
+
+    await adminService.login({ email: admin.email, password: PASSWORD }, device).catch(() => {})
+
+    expect(errSpy).toHaveBeenCalledTimes(1)
+    expect(errSpy.mock.calls[0]).toContain(cause)
+    errSpy.mockRestore()
+  })
+
+  it('does not leak the provider message to the client', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(sendOtpEmail).mockRejectedValueOnce(providerFailure())
+
+    const err = await adminService
+      .login({ email: admin.email, password: PASSWORD }, device)
+      .then(() => null)
+      .catch((e: unknown) => e as { message: string; details?: unknown })
+
+    expect(err).not.toBeNull()
+    expect(err!.message).not.toMatch(/RESEND_API_KEY/)
+    expect(err!.message).toBe(
+      'Could not send your login code. Email is not configured or the sender domain is not verified.',
+    )
+    expect(JSON.stringify(err!.details ?? null)).not.toMatch(/RESEND_API_KEY/)
+    errSpy.mockRestore()
+  })
+
+  it('persists no challenge on a failed send, so the next login attempt is unblocked', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(sendOtpEmail).mockRejectedValueOnce(providerFailure())
+
+    await expect(adminService.login({ email: admin.email, password: PASSWORD }, device)).rejects.toMatchObject({
+      code: 'OTP_EMAIL_FAILED',
+    })
+    // createChallenge sends BEFORE inserting, so a failed send leaves no row
+    // behind — nothing to expire or clean up before a retry.
+    expect(challengesStore.size).toBe(0)
+
+    // Retry once email works again: a fresh challenge is issued and verifies.
+    const retry = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+    if (!('otpRequired' in retry)) throw new Error('expected challenge')
+    expect(challengesStore.size).toBe(1)
+    const result = await adminOtpService.verifyChallenge({
+      challengeId: retry.otpChallengeId,
+      code: sentOtps[0].otp,
+      device,
+    })
+    expect(result.admin.email).toBe(admin.email)
+    errSpy.mockRestore()
+  })
+
+  it('cannot fire for a TOTP-method challenge — no email is attempted at all', async () => {
+    process.env.ADMIN_OTP_REQUIRED = 'true'
+    __resetSettingsCache()
+    const admin = seedAdmin({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabledAt: Math.floor(Date.now() / 1000) })
+
+    // No queued rejection here on purpose: an unconsumed `...Once` implementation
+    // would survive `clearAllMocks` and poison the next test.
+    const result = await adminService.login({ email: admin.email, password: PASSWORD }, device)
+
+    expect(result).toMatchObject({ otpRequired: true, method: 'totp' })
+    expect(sendOtpEmail).not.toHaveBeenCalled()
+    expect(challengesStore.size).toBe(1)
+  })
+})
+
 describe('admin login — TOTP method once enrolled', () => {
   const TOTP_SECRET = 'JBSWY3DPEHPK3PXP'
 

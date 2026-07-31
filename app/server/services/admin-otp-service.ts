@@ -39,6 +39,12 @@ const otpInvalid = () => new AppError(401, 'OTP_INVALID', 'Invalid or expired co
 const otpExpired = () => new AppError(401, 'OTP_EXPIRED', 'Code has expired')
 const otpLocked = () =>
   new AppError(429, 'OTP_LOCKED', 'Too many failed attempts', { retry_after_seconds: CHALLENGE_TTL_SECONDS })
+const otpEmailFailed = () =>
+  new AppError(
+    502,
+    'OTP_EMAIL_FAILED',
+    'Could not send your login code. Email is not configured or the sender domain is not verified.',
+  )
 
 /** Live TOTP-or-backup-code verification, delegated to `admin-totp-service` (Task 3). */
 export async function verifyTotpOrBackupCode(admin: AdminDoc & { id: string }, code: string): Promise<boolean> {
@@ -62,7 +68,17 @@ export async function createChallenge(admin: {
   if (method === 'email') {
     const code = generateSixDigitCode()
     codeHash = sha256(code)
-    await sendOtpEmail({ to: admin.email, otp: code })
+    try {
+      await sendOtpEmail({ to: admin.email, otp: code })
+    } catch (err) {
+      // Without this the admin sees a bare 500 after a CORRECT password and has
+      // no idea why. The underlying cause is a deployment problem (no
+      // RESEND_API_KEY, unverified sender domain), so log it for the platform
+      // logs and return a stable, non-leaking code to the client — the provider
+      // message can carry account/config detail and must not reach the browser.
+      console.error('[admin-otp] failed to send login OTP email', err)
+      throw otpEmailFailed()
+    }
   }
 
   const challengeId = otpRepo.generateChallengeId()
