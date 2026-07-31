@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto'
 import { AppError } from '@/server/core/errors'
-import { getSettings } from '@/server/core/settings'
+import { getSettings, resolveEmailFrom } from '@/server/core/settings'
 import { sha256, timingSafeStringEqual } from '@/server/security/hash'
 import * as otpRepo from '@/server/repositories/admin-otp-repo'
 import * as adminRepo from '@/server/repositories/admin-repo'
@@ -46,6 +46,25 @@ const otpEmailFailed = () =>
     'Could not send your login code. Email is not configured or the sender domain is not verified.',
   )
 
+/**
+ * Best-effort provider detail for the OTP-failure log line.
+ *
+ * A Resend API failure arrives WRAPPED: `dispatch()` raises
+ * `AppError('EMAIL_SEND_FAILED')` carrying the SDK's `{name, message,
+ * statusCode}` in `details`, so the real complaint sits one level down. A
+ * missing `RESEND_API_KEY` instead throws a plain Error, whose own name and
+ * message ARE the detail. Unwrap both, and never throw from here — this runs
+ * inside a catch block whose job is to produce a stable 502.
+ */
+function describeSendFailure(err: unknown): string {
+  const detail = err instanceof AppError ? (err.details ?? err) : err
+  const src = (detail ?? {}) as { name?: unknown; message?: unknown; statusCode?: unknown }
+  const name = typeof src.name === 'string' && src.name ? src.name : 'Error'
+  const message = typeof src.message === 'string' ? src.message : String(detail)
+  const status = typeof src.statusCode === 'number' ? ` (statusCode=${src.statusCode})` : ''
+  return `${name}: ${message}${status}`
+}
+
 /** Live TOTP-or-backup-code verification, delegated to `admin-totp-service` (Task 3). */
 export async function verifyTotpOrBackupCode(admin: AdminDoc & { id: string }, code: string): Promise<boolean> {
   return adminTotpService.verifyTotpOrBackupCode(admin, code)
@@ -76,7 +95,21 @@ export async function createChallenge(admin: {
       // RESEND_API_KEY, unverified sender domain), so log it for the platform
       // logs and return a stable, non-leaking code to the client — the provider
       // message can carry account/config detail and must not reach the browser.
-      console.error('[admin-otp] failed to send login OTP email', err)
+      //
+      // The log line names the resolved sender and the provider's own
+      // name/message, because "which address did we actually send AS" is half
+      // the answer and a generic string sends whoever reads this back to
+      // guess-and-redeploy. Resolved off `process.env` rather than
+      // `getSettings()`: settings validation THROWS on a half-configured
+      // deployment, which would replace this 502 with a confusing 500.
+      const from = resolveEmailFrom({
+        RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
+        EMAIL_FROM: process.env.EMAIL_FROM,
+      })
+      console.error(
+        `[admin-otp] failed to send login OTP email to ${admin.email} (from=${from}): ${describeSendFailure(err)}`,
+        err,
+      )
       throw otpEmailFailed()
     }
   }
