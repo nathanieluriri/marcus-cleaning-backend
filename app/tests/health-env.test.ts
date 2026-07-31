@@ -28,6 +28,7 @@ const MANAGED_KEYS = [
   'DB_NAME',
   'JWT_SECRET',
   'RESEND_API_KEY',
+  'RESEND_FROM_EMAIL',
   'EMAIL_FROM',
   'SUPER_ADMIN_EMAIL',
   'SUPER_ADMIN_PASSWORD',
@@ -61,6 +62,7 @@ const SECRETS: Record<string, string> = {
   JWT_SECRET: 'jwt-SENTINEL-03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   RESEND_API_KEY: 're_SENTINEL_04_resendkey',
   EMAIL_FROM: 'Marcus Cleaning <no-reply@sentinel05.example.com>',
+  RESEND_FROM_EMAIL: 'Marcus Cleaning <no-reply@sentinel19.example.com>',
   SUPER_ADMIN_EMAIL: 'root-SENTINEL-06@example.com',
   SUPER_ADMIN_PASSWORD: 'super-admin-pwd-SENTINEL-07',
   CORS_ORIGINS: 'https://admin-SENTINEL-08.example.com',
@@ -149,6 +151,8 @@ describe('GET /api/health — env booleans', () => {
       jwtSecret: true,
       resendApiKey: true,
       emailFromConfigured: true,
+      // setAll() sets BOTH sender vars — RESEND_FROM_EMAIL must win.
+      emailFromSource: 'RESEND_FROM_EMAIL',
       superAdminEmail: true,
       superAdminPassword: true,
       corsOriginsConfigured: true,
@@ -177,6 +181,7 @@ describe('GET /api/health — env booleans', () => {
       jwtSecret: false,
       resendApiKey: false,
       emailFromConfigured: false,
+      emailFromSource: 'default',
       superAdminEmail: false,
       superAdminPassword: false,
       corsOriginsConfigured: false,
@@ -207,12 +212,96 @@ describe('GET /api/health — env booleans', () => {
     expect(body.env.s3BucketName).toBe(false)
   })
 
-  it('calls the built-in EMAIL_FROM placeholder "not configured" (Resend would reject it)', async () => {
+  it('calls the built-in sender placeholder "not configured" (Resend would reject it)', async () => {
     process.env.EMAIL_FROM = DEFAULT_EMAIL_FROM
 
     const { body } = await getHealth()
 
     expect(body.env.emailFromConfigured).toBe(false)
+    expect(body.env.emailFromSource).toBe('default')
+  })
+})
+
+describe('GET /api/health — which sender var is in play', () => {
+  const RESEND_NAME = 'Marcus Cleaning <no-reply@resend-var.example.com>'
+  const LEGACY_NAME = 'Marcus Cleaning <no-reply@legacy-var.example.com>'
+
+  it('reports RESEND_FROM_EMAIL when both are set — it takes precedence', async () => {
+    process.env.RESEND_FROM_EMAIL = RESEND_NAME
+    process.env.EMAIL_FROM = LEGACY_NAME
+
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('RESEND_FROM_EMAIL')
+    expect(body.env.emailFromConfigured).toBe(true)
+  })
+
+  it('reports RESEND_FROM_EMAIL when it is the only one set', async () => {
+    process.env.RESEND_FROM_EMAIL = RESEND_NAME
+
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('RESEND_FROM_EMAIL')
+    expect(body.env.emailFromConfigured).toBe(true)
+  })
+
+  it('still reports EMAIL_FROM when only the legacy var is set (backward compatible)', async () => {
+    process.env.EMAIL_FROM = LEGACY_NAME
+
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('EMAIL_FROM')
+    expect(body.env.emailFromConfigured).toBe(true)
+  })
+
+  it('reports "default" when neither is set', async () => {
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('default')
+    expect(body.env.emailFromConfigured).toBe(false)
+  })
+
+  it('treats a blank RESEND_FROM_EMAIL as unset and falls through to EMAIL_FROM', async () => {
+    process.env.RESEND_FROM_EMAIL = '   '
+    process.env.EMAIL_FROM = LEGACY_NAME
+
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('EMAIL_FROM')
+    expect(body.env.emailFromConfigured).toBe(true)
+  })
+
+  it('reports "default" when RESEND_FROM_EMAIL wins but holds the placeholder', async () => {
+    // Precedence is unconditional, so the placeholder in the winning var is what
+    // Resend would actually receive — EMAIL_FROM does NOT rescue it.
+    process.env.RESEND_FROM_EMAIL = DEFAULT_EMAIL_FROM
+    process.env.EMAIL_FROM = LEGACY_NAME
+
+    const { body } = await getHealth()
+
+    expect(body.env.emailFromSource).toBe('default')
+    expect(body.env.emailFromConfigured).toBe(false)
+  })
+
+  it('keeps emailFromConfigured and emailFromSource consistent in every case', async () => {
+    const cases: Array<Record<string, string | undefined>> = [
+      {},
+      { RESEND_FROM_EMAIL: RESEND_NAME },
+      { EMAIL_FROM: LEGACY_NAME },
+      { RESEND_FROM_EMAIL: RESEND_NAME, EMAIL_FROM: LEGACY_NAME },
+      { RESEND_FROM_EMAIL: DEFAULT_EMAIL_FROM },
+      { EMAIL_FROM: DEFAULT_EMAIL_FROM },
+    ]
+
+    for (const c of cases) {
+      delete process.env.RESEND_FROM_EMAIL
+      delete process.env.EMAIL_FROM
+      for (const [k, v] of Object.entries(c)) if (v !== undefined) process.env[k] = v
+
+      const { body } = await getHealth()
+
+      expect(body.env.emailFromConfigured, JSON.stringify(c)).toBe(body.env.emailFromSource !== 'default')
+    }
   })
 
   it('requires BOTH halves of the Upstash pair before reporting it configured', async () => {
@@ -269,7 +358,8 @@ describe('GET /api/health — never leaks a secret', () => {
     setAll()
 
     const { body } = await getHealth()
-    const literalKeys = new Set(['storageBackend', 'nodeEnv', 'env'])
+    // `emailFromSource` is a var NAME, not a value — hence a string, not a boolean.
+    const literalKeys = new Set(['storageBackend', 'nodeEnv', 'env', 'emailFromSource'])
 
     for (const [key, value] of Object.entries(body.env)) {
       if (literalKeys.has(key)) {

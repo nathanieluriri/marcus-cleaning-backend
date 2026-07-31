@@ -34,7 +34,8 @@ tests (see below).
 | --- | --- |
 | `mongodbUri`, `dbName`, `jwtSecret` | required trio — the app cannot boot without these |
 | `resendApiKey` | `RESEND_API_KEY` is set |
-| `emailFromConfigured` | `EMAIL_FROM` is set **and** is not the built-in placeholder |
+| `emailFromConfigured` | `RESEND_FROM_EMAIL` **or** `EMAIL_FROM` is set to something other than the built-in placeholder |
+| `emailFromSource` | literal `'RESEND_FROM_EMAIL' \| 'EMAIL_FROM' \| 'default'` — which var actually supplies the sender. A var **name**, never its value |
 | `superAdminEmail`, `superAdminPassword` | bootstrap admin credentials |
 | `corsOriginsConfigured` | `false` means CORS falls back to `http://localhost:3000` |
 | `storageBackend` | literal `'s3' \| 'local' \| 'blob'` |
@@ -65,6 +66,21 @@ place means every transactional email fails — including the login OTP. That is
 the most likely root cause of symptom (2).
 
 A var also counts as unset when it is present but blank/whitespace.
+
+### The sender address has two accepted names
+
+`RESEND_FROM_EMAIL` (preferred — it is what Resend's own docs call it) and
+`EMAIL_FROM` (the original name here) both work. `RESEND_FROM_EMAIL` wins when
+both are set. The precedence lives in one place, `resolveEmailFromWithSource()`
+in `server/core/settings.ts`; both the send helpers and this endpoint call it, so
+the reported source cannot disagree with the address Resend is actually handed.
+Health still passes it raw `process.env` values rather than parsed settings, for
+the reason above.
+
+Setting the *winning* var to the placeholder reports `'default'` /
+`emailFromConfigured: false` — precedence is unconditional, so a good
+`EMAIL_FROM` does not rescue a placeholder `RESEND_FROM_EMAIL`. The invariant
+`emailFromConfigured === (emailFromSource !== 'default')` is pinned by a test.
 
 ## 2. A failed OTP email is now a controlled 502, not a 500
 

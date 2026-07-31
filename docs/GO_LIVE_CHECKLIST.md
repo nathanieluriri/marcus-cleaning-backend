@@ -54,7 +54,7 @@ right URL and that you're authenticated before pushing.
 | Key | Value | Why |
 | --- | --- | --- |
 | `RESEND_API_KEY` | your Resend key | login OTP codes + admin invite emails |
-| `EMAIL_FROM` | e.g. `Marcus Cleaning <no-reply@yourdomain>` | sender for those emails |
+| `RESEND_FROM_EMAIL` | e.g. `Marcus Cleaning <no-reply@yourdomain>` | sender for those emails. **Preferred name.** `EMAIL_FROM` is still accepted as a fallback — set either one, and if both are set `RESEND_FROM_EMAIL` wins. The address must be on a domain you have verified in Resend, or every send fails. |
 | `SUPER_ADMIN_EMAIL` | your admin email | bootstraps the first super admin on first login |
 | `SUPER_ADMIN_PASSWORD` | a strong password | same; used once, then change it in-app |
 | `CORS_ORIGINS` | the admin site origin, comma-separated | e.g. `https://admin.yourdomain.com` |

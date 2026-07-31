@@ -1,7 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { getDb } from '@/server/core/mongo'
-import { DEFAULT_EMAIL_FROM } from '@/server/core/settings'
+import { DEFAULT_EMAIL_FROM, resolveEmailFromWithSource } from '@/server/core/settings'
 
 /**
  * Health endpoints. `/health` pings MongoDB and reports which environment
@@ -18,8 +18,9 @@ const isSet = (v: string | undefined): boolean => typeof v === 'string' && v.tri
  * Deployment diagnostics — BOOLEANS ONLY.
  *
  * This endpoint is PUBLIC. Never emit a secret's value, length, or prefix; a
- * `true`/`false` is the entire contract. Only the three genuinely non-secret
- * knobs (`storageBackend`, `nodeEnv`, `env`) report a literal.
+ * `true`/`false` is the entire contract. Only the four genuinely non-secret
+ * knobs (`storageBackend`, `nodeEnv`, `env`, `emailFromSource`) report a
+ * literal — and `emailFromSource` reports a var NAME, never its value.
  *
  * Read from `process.env` directly rather than `getSettings()`: settings
  * validation throws when a required var is missing, which is precisely the
@@ -27,16 +28,27 @@ const isSet = (v: string | undefined): boolean => typeof v === 'string' && v.tri
  */
 function envReport() {
   const e = process.env
+
+  // Same precedence rule the send helpers use, applied to the raw env rather
+  // than to parsed settings. `source` is a var NAME, never a var value.
+  const emailFrom = resolveEmailFromWithSource({
+    RESEND_FROM_EMAIL: e.RESEND_FROM_EMAIL,
+    EMAIL_FROM: e.EMAIL_FROM,
+  })
+
   return {
     // required trio — the app cannot boot without these
     mongodbUri: isSet(e.MONGODB_URI),
     dbName: isSet(e.DB_NAME),
     jwtSecret: isSet(e.JWT_SECRET),
 
-    // email (Resend). The built-in EMAIL_FROM placeholder is as good as unset:
+    // email (Resend). The built-in sender placeholder is as good as unset:
     // Resend rejects an unverified sender domain, so every send fails.
     resendApiKey: isSet(e.RESEND_API_KEY),
-    emailFromConfigured: isSet(e.EMAIL_FROM) && e.EMAIL_FROM !== DEFAULT_EMAIL_FROM,
+    /** True when RESEND_FROM_EMAIL *or* EMAIL_FROM holds a real (non-placeholder) address. */
+    emailFromConfigured: emailFrom.value !== DEFAULT_EMAIL_FROM,
+    /** Which of the two names is actually in play — the name only, never the address. */
+    emailFromSource: emailFrom.source,
 
     // bootstrap admin
     superAdminEmail: isSet(e.SUPER_ADMIN_EMAIL),
@@ -81,6 +93,7 @@ const envSchema = z.object({
   jwtSecret: z.boolean(),
   resendApiKey: z.boolean(),
   emailFromConfigured: z.boolean(),
+  emailFromSource: z.enum(['RESEND_FROM_EMAIL', 'EMAIL_FROM', 'default']),
   superAdminEmail: z.boolean(),
   superAdminPassword: z.boolean(),
   corsOriginsConfigured: z.boolean(),

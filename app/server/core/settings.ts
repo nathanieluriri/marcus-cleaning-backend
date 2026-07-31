@@ -19,7 +19,7 @@ const boolFromEnv = (def: boolean) =>
     .transform((v) => (v === undefined ? def : v.toLowerCase() === 'true'))
 
 /**
- * Built-in EMAIL_FROM placeholder. A real deployment MUST override it — Resend
+ * Built-in sender placeholder. A real deployment MUST override it — Resend
  * rejects a sender on an unverified domain, so leaving this in place means every
  * transactional email (including the admin login OTP) fails. `/api/health`
  * reports it as "not configured" for exactly that reason.
@@ -64,6 +64,13 @@ const EnvSchema = z
     // email (Resend)
     RESEND_API_KEY: z.string().optional(),
     RESEND_WEBHOOK_SECRET: z.string().optional(),
+    /**
+     * Preferred name for the sender address — it is what Resend's own docs and
+     * dashboard call it, so most deployments already have it set. Takes
+     * precedence over EMAIL_FROM; see `resolveEmailFrom()`.
+     */
+    RESEND_FROM_EMAIL: z.string().optional(),
+    /** Legacy name for the sender address. Still fully supported, as a fallback. */
     EMAIL_FROM: z.string().default(DEFAULT_EMAIL_FROM),
 
     // payments
@@ -158,6 +165,41 @@ const EnvSchema = z
   })
 
 export type Settings = z.infer<typeof EnvSchema>
+
+/** Which env var supplied the sender address actually in use. */
+export type EmailFromSource = 'RESEND_FROM_EMAIL' | 'EMAIL_FROM' | 'default'
+
+/**
+ * Loose input shape so both a parsed `Settings` and a raw `process.env` can be
+ * resolved by the same code — `/api/health` deliberately reads `process.env`
+ * (it must report on a deployment whose settings would fail validation).
+ */
+type EmailFromEnv = { RESEND_FROM_EMAIL?: string; EMAIL_FROM?: string }
+
+/**
+ * Resolve the transactional sender address, and say where it came from.
+ *
+ * `RESEND_FROM_EMAIL` wins over `EMAIL_FROM` — it is the name Resend itself
+ * uses, so it is the one already set on most deployments. `EMAIL_FROM` stays
+ * fully supported as the fallback; neither name is going away.
+ *
+ * A blank/whitespace-only value counts as unset, and an explicitly-configured
+ * DEFAULT_EMAIL_FROM reports `'default'` — Resend rejects that placeholder, so
+ * setting it is no better than setting nothing.
+ */
+export function resolveEmailFromWithSource(s: EmailFromEnv): { value: string; source: EmailFromSource } {
+  for (const name of ['RESEND_FROM_EMAIL', 'EMAIL_FROM'] as const) {
+    const value = s[name]?.trim()
+    if (!value) continue
+    return value === DEFAULT_EMAIL_FROM ? { value, source: 'default' } : { value, source: name }
+  }
+  return { value: DEFAULT_EMAIL_FROM, source: 'default' }
+}
+
+/** The sender address to hand Resend. See `resolveEmailFromWithSource`. */
+export function resolveEmailFrom(s: EmailFromEnv): string {
+  return resolveEmailFromWithSource(s).value
+}
 
 let cached: Settings | null = null
 

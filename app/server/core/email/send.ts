@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
 import { getResend } from './resend'
-import { getSettings } from '@/server/core/settings'
+import { getSettings, resolveEmailFrom } from '@/server/core/settings'
 import { AppError } from '@/server/core/errors'
 import { sha256 } from '@/server/security/hash'
 import { OtpEmail } from '@/server/emails/otp'
@@ -34,7 +34,8 @@ async function dispatch(args: {
   const to = Array.isArray(args.to) ? args.to : [args.to]
   const { data, error } = await getResend().emails.send(
     {
-      from: getSettings().EMAIL_FROM,
+      // RESEND_FROM_EMAIL first, then EMAIL_FROM — never read either directly.
+      from: resolveEmailFrom(getSettings()),
       to,
       subject: args.subject,
       react: args.react,
