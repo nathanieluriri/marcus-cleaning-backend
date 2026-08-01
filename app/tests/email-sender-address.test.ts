@@ -1,20 +1,36 @@
-import { describe, expect, it, vi, beforeEach, afterAll } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach, afterAll } from 'vitest'
 
 /**
- * The Resend sender address: `RESEND_FROM_EMAIL` first, `EMAIL_FROM` second,
- * built-in placeholder last.
+ * What `dispatch()` hands the Resend SDK: the sender address, and the RENDERED
+ * email body.
  *
- * `RESEND_FROM_EMAIL` is the name Resend's own docs use, so it is the one
+ * Sender — `RESEND_FROM_EMAIL` first, `EMAIL_FROM` second, built-in placeholder
+ * last. `RESEND_FROM_EMAIL` is the name Resend's own docs use, so it is the one
  * deployments already have set; `EMAIL_FROM` predates it here and must keep
  * working. Getting this wrong is not subtle — Resend rejects the placeholder
  * sender outright, which takes down the admin login OTP with it.
  *
- * The Resend client is mocked so `dispatch()` runs for real and we can assert
- * on the exact `from` handed to the SDK.
+ * Body — `html`/`text` strings we rendered ourselves, NEVER a `react` element.
+ * Handing the SDK `react` makes it resolve a renderer through a dynamic
+ * `import('@react-email/render')` that Next's file tracing cannot follow, so the
+ * renderer is missing from the deployed bundle and every template send fails
+ * with "Failed to render React component". That is a production outage, not a
+ * style preference, which is why it is pinned here.
+ *
+ * The Resend client is mocked so `dispatch()` — including the real React Email
+ * render — runs for real and we can assert on the exact payload handed to the SDK.
  */
 
 /** The shape `dispatch()` hands the Resend SDK — typed so `mock.calls` is too. */
-type ResendPayload = { from: string; to: string[]; subject: string; react: unknown }
+type ResendPayload = {
+  from: string
+  to: string[]
+  subject: string
+  html: string
+  text: string
+  /** Must never be populated again — see the header. Typed so the assertion compiles. */
+  react?: unknown
+}
 type ResendOptions = { idempotencyKey: string }
 type ResendResult = { data: { id: string } | null; error: unknown }
 
@@ -178,5 +194,99 @@ describe('send helpers pass the resolved sender to Resend', () => {
     expect(payload.to).toEqual(['admin@example.com'])
     expect(payload.subject).toBe('Your Marcus Cleaning login code')
     expect(opts.idempotencyKey).toBe('otp/admin@example.com/123456')
+  })
+})
+
+describe('dispatch renders the template itself and sends html/text, never `react`', () => {
+  /** A code with no repeated digits, so finding it in the output cannot be luck. */
+  const OTP = '482913'
+
+  async function otpPayload(): Promise<ResendPayload> {
+    await sendOtpEmail({ to: 'admin@example.com', otp: OTP })
+    expect(sendImpl).toHaveBeenCalledTimes(1)
+    return sendImpl.mock.calls[0][0]
+  }
+
+  it('passes no `react` element at all', async () => {
+    // The whole bug: `react` is what triggers the SDK's untraceable dynamic
+    // import of the renderer.
+    expect((await otpPayload()).react).toBeUndefined()
+  })
+
+  it('passes a non-empty html STRING', async () => {
+    const { html } = await otpPayload()
+
+    expect(typeof html).toBe('string')
+    expect(html.length).toBeGreaterThan(0)
+  })
+
+  it('passes a non-empty text STRING', async () => {
+    const { text } = await otpPayload()
+
+    expect(typeof text).toBe('string')
+    expect(text.length).toBeGreaterThan(0)
+  })
+
+  it('really rendered the OtpEmail template — the html carries the code and the copy', async () => {
+    const { html } = await otpPayload()
+
+    // Asserting only `typeof html === 'string'` would pass on `''` or on a
+    // stringified object. These assertions only hold if the actual template
+    // rendered, which is the thing production was failing to do.
+    expect(html).toContain(OTP)
+    expect(html).toContain('Your Marcus Cleaning login code')
+    expect(html).toContain('admin@example.com')
+    expect(html).toMatch(/<html\b/i)
+  })
+
+  it('renders the plain-text alternative from the same template, code included', async () => {
+    const { text, html } = await otpPayload()
+
+    expect(text).toContain(OTP)
+    // Plain text, not a copy of the markup — otherwise it is no fallback at all.
+    expect(text).not.toContain('<html')
+    expect(text).not.toContain('<p ')
+    expect(text.length).toBeLessThan(html.length)
+  })
+
+  it('renders the code that was actually asked for, not a cached first render', async () => {
+    await sendOtpEmail({ to: 'admin@example.com', otp: '111111' })
+    await sendOtpEmail({ to: 'admin@example.com', otp: '999999' })
+
+    expect(sendImpl.mock.calls[0][0].html).toContain('111111')
+    expect(sendImpl.mock.calls[1][0].html).toContain('999999')
+    expect(sendImpl.mock.calls[1][0].html).not.toContain('111111')
+  })
+})
+
+describe('dispatch surfaces a render failure instead of sending an empty email', () => {
+  afterEach(() => {
+    vi.doUnmock('@react-email/components')
+    vi.resetModules()
+  })
+
+  it('throws EMAIL_SEND_FAILED and never calls Resend when the render throws', async () => {
+    // A silently-empty email is worse than a hard failure: it looks delivered.
+    vi.resetModules()
+    vi.doMock('@react-email/components', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      render: vi.fn(async () => {
+        throw new Error('Failed to render React component.')
+      }),
+    }))
+
+    const { sendOtpEmail: freshSendOtpEmail } = await import('@/server/core/email/send')
+
+    await expect(freshSendOtpEmail({ to: 'admin@example.com', otp: '123456' })).rejects.toMatchObject({
+      httpStatus: 502,
+      code: 'EMAIL_SEND_FAILED',
+      details: {
+        name: 'EMAIL_RENDER_FAILED',
+        // The provider's own words survive: the health diagnostic reads exactly
+        // this to tell a render failure from a delivery failure.
+        message: expect.stringContaining('Failed to render React component.'),
+      },
+    })
+    expect(sendImpl).not.toHaveBeenCalled()
   })
 })

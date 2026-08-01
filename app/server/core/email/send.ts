@@ -1,4 +1,6 @@
 import type { ReactElement } from 'react'
+// STATIC import, and it must stay static. See dispatch() for why.
+import { render } from '@react-email/components'
 import { getResend } from './resend'
 import { getSettings, resolveEmailFrom } from '@/server/core/settings'
 import { AppError } from '@/server/core/errors'
@@ -17,13 +19,17 @@ import { PasswordResetEmail } from '@/server/emails/password-reset'
  * Each helper checks `error` and raises an AppError on failure.
  *
  * React components are passed as a function call (`OtpEmail({...})`), NOT JSX,
- * in the `react` field. The idempotency key is the SECOND argument (24h dedupe).
+ * in each helper's `react` field. The idempotency key is the SECOND argument to
+ * the SDK (24h dedupe).
  *
  * See: docs/migration/08-email-resend.md
  */
 
 const emailSendError = (detail: unknown) =>
   new AppError(502, 'EMAIL_SEND_FAILED', 'Failed to send email', detail)
+
+/** Message of an unknown thrown value, without assuming it is an Error. */
+const describeThrown = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 async function dispatch(args: {
   to: string | string[]
@@ -32,13 +38,43 @@ async function dispatch(args: {
   idempotencyKey: string
 }) {
   const to = Array.isArray(args.to) ? args.to : [args.to]
+
+  // Render HERE rather than handing the SDK `react`.
+  //
+  // Given `react`, the Resend SDK resolves a renderer through a DYNAMIC
+  // `await import('@react-email/render')`. Next's serverless file tracing cannot
+  // see through a dynamic bare specifier, so the renderer never makes it into
+  // the deployed bundle and EVERY template send dies at runtime with "Failed to
+  // render React component" — which is what took admin login down: the OTP mail
+  // was never sent. (`@react-email/render` is not even a top-level install here;
+  // it ships nested under `@react-email/components`.)
+  //
+  // The static import above re-exports that same renderer through a specifier
+  // the bundler CAN follow, so the dependency is resolved at build time.
+  let html: string
+  let text: string
+  try {
+    html = await render(args.react)
+    // Plain-text alternative: better deliverability, and a readable fallback for
+    // clients that refuse HTML.
+    text = await render(args.react, { plainText: true })
+  } catch (err) {
+    // Never paper over this by sending an empty body — a blank OTP email is
+    // worse than a failure, because it looks delivered.
+    throw emailSendError({
+      name: 'EMAIL_RENDER_FAILED',
+      message: `could not render the email template: ${describeThrown(err)}`,
+    })
+  }
+
   const { data, error } = await getResend().emails.send(
     {
       // RESEND_FROM_EMAIL first, then EMAIL_FROM — never read either directly.
       from: resolveEmailFrom(getSettings()),
       to,
       subject: args.subject,
-      react: args.react,
+      html,
+      text,
     },
     { idempotencyKey: args.idempotencyKey },
   )
