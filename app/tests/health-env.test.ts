@@ -35,6 +35,8 @@ const MANAGED_KEYS = [
   'CORS_ORIGINS',
   'STORAGE_BACKEND',
   'S3_BUCKET_NAME',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
   'FIREBASE_PROJECT_ID',
   'FCM_PROJECT_ID',
   'FCM_CLIENT_EMAIL',
@@ -67,6 +69,10 @@ const SECRETS: Record<string, string> = {
   SUPER_ADMIN_PASSWORD: 'super-admin-pwd-SENTINEL-07',
   CORS_ORIGINS: 'https://admin-SENTINEL-08.example.com',
   S3_BUCKET_NAME: 'bucket-SENTINEL-09',
+  // Obvious fakes. Presence-only reporting means these must never be echoed —
+  // the leak assertions below sweep every value in this map.
+  S3_ACCESS_KEY_ID: 'fake-access-key-id-SENTINEL-20',
+  S3_SECRET_ACCESS_KEY: 'fake-secret-access-key-SENTINEL-21',
   FIREBASE_PROJECT_ID: 'firebase-SENTINEL-10',
   FCM_PROJECT_ID: 'fcm-SENTINEL-11',
   FCM_CLIENT_EMAIL: 'svc-SENTINEL-12@iam.example.com',
@@ -158,6 +164,8 @@ describe('GET /api/health — env booleans', () => {
       corsOriginsConfigured: true,
       storageBackend: 's3',
       s3BucketName: true,
+      s3AccessKeyId: true,
+      s3SecretAccessKey: true,
       firebaseProjectId: true,
       fcmProjectId: true,
       fcmClientEmail: true,
@@ -186,6 +194,9 @@ describe('GET /api/health — env booleans', () => {
       superAdminPassword: false,
       corsOriginsConfigured: false,
       s3BucketName: false,
+      // Both false = the AWS SDK's default credential chain is in charge.
+      s3AccessKeyId: false,
+      s3SecretAccessKey: false,
       firebaseProjectId: false,
       fcmProjectId: false,
       fcmClientEmail: false,
@@ -210,6 +221,43 @@ describe('GET /api/health — env booleans', () => {
 
     expect(body.env.resendApiKey).toBe(false)
     expect(body.env.s3BucketName).toBe(false)
+  })
+
+  it('reports each S3 credential half independently, presence only', async () => {
+    // Unlike `upstashRedis` these are NOT collapsed into one flag: seeing which
+    // half is missing is the whole point when an R2 deployment fails to sign.
+    // (Settings validation refuses to boot in that state — this endpoint is how
+    // you find out why, and it reads process.env rather than parsed settings.)
+    process.env.S3_ACCESS_KEY_ID = SECRETS.S3_ACCESS_KEY_ID
+    let body = (await getHealth()).body
+    expect(body.env.s3AccessKeyId).toBe(true)
+    expect(body.env.s3SecretAccessKey).toBe(false)
+
+    delete process.env.S3_ACCESS_KEY_ID
+    process.env.S3_SECRET_ACCESS_KEY = SECRETS.S3_SECRET_ACCESS_KEY
+    body = (await getHealth()).body
+    expect(body.env.s3AccessKeyId).toBe(false)
+    expect(body.env.s3SecretAccessKey).toBe(true)
+
+    process.env.S3_ACCESS_KEY_ID = SECRETS.S3_ACCESS_KEY_ID
+    body = (await getHealth()).body
+    expect(body.env.s3AccessKeyId).toBe(true)
+    expect(body.env.s3SecretAccessKey).toBe(true)
+
+    // Still nothing but booleans — no length, no prefix, no value.
+    const raw = (await getHealth()).raw
+    expect(raw).not.toContain(SECRETS.S3_ACCESS_KEY_ID)
+    expect(raw).not.toContain(SECRETS.S3_SECRET_ACCESS_KEY)
+  })
+
+  it('treats a blank S3 credential as unset', async () => {
+    process.env.S3_ACCESS_KEY_ID = '   '
+    process.env.S3_SECRET_ACCESS_KEY = ''
+
+    const { body } = await getHealth()
+
+    expect(body.env.s3AccessKeyId).toBe(false)
+    expect(body.env.s3SecretAccessKey).toBe(false)
   })
 
   it('calls the built-in sender placeholder "not configured" (Resend would reject it)', async () => {

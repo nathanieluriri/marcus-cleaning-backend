@@ -90,6 +90,17 @@ const EnvSchema = z
     S3_BUCKET_NAME: z.string().optional(),
     S3_REGION: z.string().optional(),
     S3_ENDPOINT_URL: z.string().optional(),
+    /**
+     * Explicit S3 credentials, handed to the SDK as-is. Required for any
+     * S3-compatible backend that is not AWS (Cloudflare R2, MinIO): on Vercel the
+     * Lambda runtime owns the `AWS_*` names, so the SDK's default credential
+     * chain cannot be pointed at another provider's keys.
+     *
+     * Both or neither — see the superRefine below. Leaving both unset is the
+     * IAM-role / default-chain path and stays fully supported.
+     */
+    S3_ACCESS_KEY_ID: z.string().optional(),
+    S3_SECRET_ACCESS_KEY: z.string().optional(),
     STORAGE_LOCAL_ROOT: z.string().default('uploads'),
 
     // cache / rate-limit (Upstash)
@@ -161,6 +172,18 @@ const EnvSchema = z
     }
     if (v.STORAGE_BACKEND === 's3' && !v.S3_BUCKET_NAME) {
       ctx.addIssue({ code: 'custom', message: 'S3 storage backend requires S3_BUCKET_NAME' })
+    }
+    // Half a credential pair is never what anyone meant: the S3 provider only
+    // passes explicit credentials when BOTH are present, so one alone is
+    // silently ignored and the SDK falls back to its default chain — which then
+    // fails at request time with an opaque signature/auth error. Refuse it at
+    // boot instead. Both absent stays legal (IAM role / default chain).
+    if (v.STORAGE_BACKEND === 's3' && Boolean(v.S3_ACCESS_KEY_ID) !== Boolean(v.S3_SECRET_ACCESS_KEY)) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'S3 storage backend requires S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY together — set both, or neither to use the default credential chain',
+      })
     }
   })
 

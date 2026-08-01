@@ -69,6 +69,15 @@ function envReport() {
     // storage — the backend name is a mode, not a secret
     storageBackend: e.STORAGE_BACKEND ?? 's3',
     s3BucketName: isSet(e.S3_BUCKET_NAME),
+    /**
+     * Explicit S3 credentials — presence ONLY, as everywhere else here. Both
+     * false means the AWS SDK's default credential chain is in charge, which is
+     * correct for an IAM role and wrong for a non-AWS backend such as R2. One
+     * true and one false cannot happen on a booted deployment: settings
+     * validation rejects a half-configured pair.
+     */
+    s3AccessKeyId: isSet(e.S3_ACCESS_KEY_ID),
+    s3SecretAccessKey: isSet(e.S3_SECRET_ACCESS_KEY),
 
     // firebase auth + push
     firebaseProjectId: isSet(e.FIREBASE_PROJECT_ID),
@@ -108,6 +117,8 @@ const envSchema = z.object({
   corsOriginsConfigured: z.boolean(),
   storageBackend: z.string(),
   s3BucketName: z.boolean(),
+  s3AccessKeyId: z.boolean(),
+  s3SecretAccessKey: z.boolean(),
   firebaseProjectId: z.boolean(),
   fcmProjectId: z.boolean(),
   fcmClientEmail: z.boolean(),
