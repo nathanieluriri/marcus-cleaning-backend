@@ -48,6 +48,23 @@ vi.mock('@/server/core/mongo', () => ({
   getClient: vi.fn(),
 }))
 
+/**
+ * The REAL OTP send helper, mocked. `mode: 'otp'` must reach THIS — template,
+ * idempotency key and all — rather than the endpoint's own plain-text probe;
+ * that is the entire point of the mode, so every case below asserts on which of
+ * the two was called.
+ *
+ * The route imports it dynamically (inside its try), so this factory does not
+ * run until the first otp-mode request.
+ */
+const sendOtpEmailImpl = vi.fn<(args: { to: string; otp: string }) => Promise<{ id: string } | null>>(async () => ({
+  id: 'msg_otp',
+}))
+
+vi.mock('@/server/core/email/send', () => ({
+  sendOtpEmail: sendOtpEmailImpl,
+}))
+
 import { health } from '@/server/routes/health'
 
 const SECRET = 'diagnostics-secret-value-0123456789'
@@ -64,7 +81,11 @@ interface EmailTestBody {
   resolvedFrom: string
   emailFromSource: string
   apiKeyPresent: boolean
-  send: { ok: true; id: string | null } | { ok: false; error: { name: string; message: string; statusCode?: number } }
+  /** Present for `mode: 'otp'` only — the throwaway code that was actually sent. */
+  otpUsed?: string
+  send:
+    | { ok: true; id: string | null }
+    | { ok: false; error: { name: string; message: string; statusCode?: number; stack?: string[] } }
 }
 
 async function post(
@@ -86,11 +107,17 @@ async function authorized(body: unknown = { to: TO }) {
   return { ...res, body: res.body as unknown as EmailTestBody }
 }
 
+/** Authorised call that exercises the real OTP send path. */
+async function authorizedOtp(body: Record<string, unknown> = {}) {
+  return authorized({ to: TO, mode: 'otp', ...body })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
-  // Re-establish the default implementation: a per-case override must not
+  // Re-establish the default implementations: a per-case override must not
   // survive into the next test.
   sendImpl.mockImplementation(async () => ({ data: { id: 'msg_diag' }, error: null }))
+  sendOtpEmailImpl.mockImplementation(async () => ({ id: 'msg_otp' }))
   getResendThrows = null
   for (const k of MANAGED_KEYS) delete process.env[k]
 })
@@ -359,6 +386,174 @@ describe('POST /api/health/email-test — provider failure is reported, never th
   })
 })
 
+describe("POST /api/health/email-test — mode: 'otp' runs the real login send path", () => {
+  beforeEach(() => {
+    process.env.DIAGNOSTICS_SECRET = SECRET
+  })
+
+  it('calls sendOtpEmail and reports its message id', async () => {
+    sendOtpEmailImpl.mockImplementation(async () => ({ id: 'msg_otp_live' }))
+
+    const { status, body } = await authorizedOtp()
+
+    expect(status).toBe(200)
+    expect(sendOtpEmailImpl).toHaveBeenCalledTimes(1)
+    // The plain-text probe must NOT also fire — a mode that quietly falls back
+    // to it would keep reporting the success we already know about.
+    expect(sendImpl).not.toHaveBeenCalled()
+    expect(body.send).toEqual({ ok: true, id: 'msg_otp_live' })
+  })
+
+  it('sends to the requested address with a 6-digit code, echoed as otpUsed', async () => {
+    const { body } = await authorizedOtp({ to: 'ops@example.org' })
+
+    const args = sendOtpEmailImpl.mock.calls[0][0]
+    expect(args.to).toBe('ops@example.org')
+    expect(args.otp).toMatch(/^\d{6}$/)
+    // `otpUsed` has to be the code actually sent, or it cannot be used to read
+    // the delivered email — or to reason about the idempotency key.
+    expect(body.otpUsed).toBe(args.otp)
+  })
+
+  it('uses a fresh code per call, so Resend cannot dedupe repeat probes', async () => {
+    // sendOtpEmail keys idempotency on `otp/<to>/<code>` with a 24h dedupe
+    // window: a fixed code would make every call after the first replay the
+    // first result instead of really sending.
+    const codes = new Set<string>()
+    for (let i = 0; i < 5; i++) codes.add((await authorizedOtp()).body.otpUsed ?? '')
+
+    expect(codes.size).toBeGreaterThan(1)
+  })
+
+  it('reports null when the provider returned no message id', async () => {
+    sendOtpEmailImpl.mockImplementation(async () => null)
+
+    expect((await authorizedOtp()).body.send).toEqual({ ok: true, id: null })
+  })
+
+  it('still reports the resolved sender and api-key presence', async () => {
+    process.env.RESEND_FROM_EMAIL = 'Marcus Cleaning <no-reply@verified.example.com>'
+    process.env.RESEND_API_KEY = 're_present_key'
+
+    const { body } = await authorizedOtp()
+
+    expect(body.resolvedFrom).toBe('Marcus Cleaning <no-reply@verified.example.com>')
+    expect(body.emailFromSource).toBe('RESEND_FROM_EMAIL')
+    expect(body.apiKeyPresent).toBe(true)
+  })
+
+  it('defaults to the plain-text path when `mode` is omitted', async () => {
+    const { status, body } = await authorized()
+
+    expect(status).toBe(200)
+    expect(sendImpl).toHaveBeenCalledTimes(1)
+    expect(sendOtpEmailImpl).not.toHaveBeenCalled()
+    expect(typeof sendImpl.mock.calls[0][0].text).toBe('string')
+    // No throwaway code was generated, so none is reported.
+    expect(body.otpUsed).toBeUndefined()
+  })
+
+  it("takes the plain-text path for an explicit mode: 'text'", async () => {
+    await authorized({ to: TO, mode: 'text' })
+
+    expect(sendImpl).toHaveBeenCalledTimes(1)
+    expect(sendOtpEmailImpl).not.toHaveBeenCalled()
+  })
+
+  it('422s on an unknown mode rather than silently defaulting', async () => {
+    const { status, body } = await post({ to: TO, mode: 'html' }, { 'x-diagnostics-secret': SECRET })
+
+    expect(status).toBe(422)
+    expect(body).toMatchObject({ data: { code: 'VALIDATION_FAILED' } })
+    expect(sendOtpEmailImpl).not.toHaveBeenCalled()
+    expect(sendImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe("POST /api/health/email-test — mode: 'otp' failures are reported, never thrown", () => {
+  beforeEach(() => {
+    process.env.DIAGNOSTICS_SECRET = SECRET
+  })
+
+  it('returns 200 with send.ok false when sendOtpEmail throws', async () => {
+    // The prime suspect: the React Email template failing to render inside the
+    // deployed bundle. It must arrive as a body, not as a 500 whose detail lands
+    // only in the runtime log this endpoint exists to bypass.
+    sendOtpEmailImpl.mockImplementation(async () => {
+      throw new TypeError('jsx is not a function')
+    })
+
+    const { status, body } = await authorizedOtp()
+
+    expect(status).toBe(200)
+    expect(body.send).toMatchObject({ ok: false, error: { name: 'TypeError', message: 'jsx is not a function' } })
+  })
+
+  it('includes the top stack frames, which a render failure needs to be readable', async () => {
+    sendOtpEmailImpl.mockImplementation(async () => {
+      throw new Error('Cannot read properties of undefined')
+    })
+
+    const { body } = await authorizedOtp()
+
+    expect(body.send.ok).toBe(false)
+    if (body.send.ok) throw new Error('unreachable')
+    const stack = body.send.error.stack
+    expect(Array.isArray(stack)).toBe(true)
+    expect(stack?.length).toBeGreaterThan(1)
+    expect(stack?.length).toBeLessThanOrEqual(5)
+    expect(stack?.[0]).toContain('Cannot read properties of undefined')
+  })
+
+  it('unwraps the provider detail out of the AppError sendOtpEmail wraps it in', async () => {
+    // sendOtpEmail turns a Resend rejection into AppError('Failed to send
+    // email', details: <provider error>). Reporting only the wrapper would hand
+    // back our own generic sentence — precisely the loss this endpoint exists to
+    // prevent.
+    sendOtpEmailImpl.mockImplementation(async () => {
+      throw Object.assign(new Error('Failed to send email'), {
+        name: 'AppError',
+        details: { name: 'validation_error', message: 'The from address is not verified', statusCode: 403 },
+      })
+    })
+
+    const { status, body } = await authorizedOtp()
+
+    expect(status).toBe(200)
+    expect(body.send).toMatchObject({
+      ok: false,
+      error: {
+        name: 'validation_error',
+        message: 'Failed to send email: The from address is not verified',
+        statusCode: 403,
+      },
+    })
+  })
+
+  it('survives a non-Error throw without becoming a 500', async () => {
+    sendOtpEmailImpl.mockImplementation(async () => {
+      throw 'plain string failure'
+    })
+
+    const { status, body } = await authorizedOtp()
+
+    expect(status).toBe(200)
+    expect(body.send).toMatchObject({ ok: false, error: { name: 'Error', message: 'plain string failure' } })
+  })
+
+  it('leaves the plain-text mode stack-free', async () => {
+    sendImpl.mockImplementation(async () => {
+      throw new Error('fetch failed')
+    })
+
+    const { body } = await authorized()
+
+    expect(body.send.ok).toBe(false)
+    if (body.send.ok) throw new Error('unreachable')
+    expect(body.send.error.stack).toBeUndefined()
+  })
+})
+
 describe('POST /api/health/email-test — never leaks the API key', () => {
   const SENTINEL_KEY = 're_SENTINEL_APIKEY_do_not_leak_0123456789'
 
@@ -409,5 +604,31 @@ describe('POST /api/health/email-test — never leaks the API key', () => {
     const { raw } = await authorized()
 
     expect(raw).not.toContain(SECRET)
+  })
+
+  it("contains no fragment of the seeded key in mode: 'otp'", async () => {
+    const { raw, body } = await authorizedOtp()
+
+    expect(body.apiKeyPresent).toBe(true)
+    expect(raw).not.toContain(SENTINEL_KEY)
+    for (const fragment of ['SENTINEL', 're_', '0123456789']) {
+      expect(raw, `fragment "${fragment}" leaked into the response`).not.toContain(fragment)
+    }
+  })
+
+  it('scrubs the key out of the OTP-mode stack, not just the message', async () => {
+    // The stack is returned verbatim apart from redaction, and its first line is
+    // the message — so the scrub has to reach every line, not only `message`.
+    sendOtpEmailImpl.mockImplementation(async () => {
+      throw new Error(`render failed while using ${SENTINEL_KEY}`)
+    })
+
+    const { raw, body } = await authorizedOtp()
+
+    expect(raw).not.toContain(SENTINEL_KEY)
+    expect(raw).not.toContain('SENTINEL')
+    expect(body.send).toMatchObject({ ok: false, error: { message: 'render failed while using [redacted]' } })
+    if (body.send.ok) throw new Error('unreachable')
+    expect(body.send.error.stack?.[0]).toContain('[redacted]')
   })
 })

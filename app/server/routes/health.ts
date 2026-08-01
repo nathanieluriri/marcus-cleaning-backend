@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto'
 import { createRoute, z } from '@hono/zod-openapi'
 import { createRouter } from '@/server/core/router'
 import { getDb } from '@/server/core/mongo'
@@ -182,7 +183,17 @@ interface ProviderError {
   name: string
   message: string
   statusCode?: number
+  /**
+   * Top frames of the throw, `mode: 'otp'` only. A template render that blows up
+   * inside the deployed bundle reports something like "x is not a function" —
+   * useless on its own, diagnostic the moment you can see which module it came
+   * from. The plain-text mode has no such ambiguity and stays stack-free.
+   */
+  stack?: string[]
 }
+
+/** Enough frames to name the failing module; not so many that the body is a log dump. */
+const STACK_LINES = 5
 
 type EmailTestSend = { ok: true; id: string | null } | { ok: false; error: ProviderError }
 
@@ -207,13 +218,41 @@ function redactApiKey(text: string): string {
  * Deliberately unsanitized apart from `redactApiKey` — "the domain is not
  * verified" is the sentence we are here to read, and a friendly generic message
  * would destroy precisely the information being chased.
+ *
+ * `stack` is opt-in per call site, because it is only worth its weight for the
+ * OTP mode (see ProviderError.stack).
  */
-function describeError(err: unknown): ProviderError {
-  const src = (err ?? {}) as { name?: unknown; message?: unknown; statusCode?: unknown }
-  const name = typeof src.name === 'string' && src.name ? src.name : 'Error'
-  const message = typeof src.message === 'string' ? src.message : String(err)
+function describeError(err: unknown, opts: { stack?: boolean } = {}): ProviderError {
+  const src = (err ?? {}) as {
+    name?: unknown
+    message?: unknown
+    statusCode?: unknown
+    details?: unknown
+    stack?: unknown
+  }
+  let name = typeof src.name === 'string' && src.name ? src.name : 'Error'
+  let message = typeof src.message === 'string' ? src.message : String(err)
+  let statusCode = typeof src.statusCode === 'number' ? src.statusCode : undefined
+
+  // `sendOtpEmail` reports a Resend rejection as AppError('Failed to send
+  // email', details: <provider error>). Describing only the wrapper would hand
+  // back our own generic sentence and drop the provider's — the exact loss this
+  // endpoint exists to prevent — so the inner error wins where it has an answer.
+  const inner = (src.details ?? {}) as { name?: unknown; message?: unknown; statusCode?: unknown }
+  if (typeof inner.message === 'string' && inner.message) {
+    message = `${message}: ${inner.message}`
+    if (typeof inner.name === 'string' && inner.name) name = inner.name
+    if (typeof inner.statusCode === 'number') statusCode = inner.statusCode
+  }
+
   const out: ProviderError = { name: redactApiKey(name), message: redactApiKey(message) }
-  if (typeof src.statusCode === 'number') out.statusCode = src.statusCode
+  if (statusCode !== undefined) out.statusCode = statusCode
+  if (opts.stack && typeof src.stack === 'string') {
+    out.stack = src.stack
+      .split('\n')
+      .slice(0, STACK_LINES)
+      .map((line) => redactApiKey(line.trim()))
+  }
   return out
 }
 
@@ -241,7 +280,39 @@ async function sendProbe(from: string, to: string): Promise<EmailTestSend> {
   }
 }
 
-const emailTestBody = z.object({ to: z.email() })
+/**
+ * Exercise the REAL OTP path — the same `sendOtpEmail()` an admin login calls,
+ * React template and idempotency key included. `mode: 'text'` proves the API
+ * key, sender domain and deliverability are sound; only this mode can catch a
+ * failure that lives in the template render instead of the provider.
+ *
+ * `send.ts` is imported dynamically, INSIDE the try, for the same reason
+ * `envReport` reads `process.env` instead of `getSettings()`: the diagnostic
+ * must not take on an eager dependency on the very thing it is testing. A
+ * template module that fails to EVALUATE in the deployed bundle is one of the
+ * candidates being hunted here, and evaluating it at import time would make that
+ * failure a load error somewhere up the graph instead of a readable 200 body.
+ * (`server/app.ts` reaches send.ts through the admin routes anyway, so this
+ * costs no extra chunk — it only keeps the failure inside this try.)
+ */
+async function sendOtpProbe(to: string, otp: string): Promise<EmailTestSend> {
+  try {
+    const { sendOtpEmail } = await import('@/server/core/email/send')
+    const data = await sendOtpEmail({ to, otp })
+    return { ok: true, id: data?.id ?? null }
+  } catch (err) {
+    return { ok: false, error: describeError(err, { stack: true }) }
+  }
+}
+
+const emailTestBody = z.object({
+  to: z.email(),
+  /**
+   * `text` (default) keeps the original plain-text probe — is Resend reachable
+   * and is the sender accepted? `otp` runs the genuine login send path instead.
+   */
+  mode: z.enum(['text', 'otp']).default('text'),
+})
 
 /**
  * POST /api/health/email-test — send one real email and report the provider's
@@ -251,6 +322,14 @@ const emailTestBody = z.object({ to: z.email() })
  * `OTP_EMAIL_FAILED` message; Resend's actual complaint ("domain is not
  * verified", "API key is invalid") reaches nothing but the Vercel runtime log,
  * which turns every fix into a guess-and-redeploy cycle.
+ *
+ * Body `mode` picks WHICH send is exercised. `'text'` (default) sends a plain
+ * string; `'otp'` runs `sendOtpEmail()` itself. The distinction earns its keep
+ * once the text probe SUCCEEDS while login still fails: that acquits the API
+ * key, the sender domain and deliverability, and leaves the OTP-specific
+ * ingredients — the React Email template render and the idempotency key — as
+ * the only remaining suspects. `mode: 'otp'` puts exactly those under the same
+ * catch-and-report treatment, `otpUsed` reporting the throwaway code sent.
  *
  * A PLAIN route rather than `.openapi()`: it is gated on a shared secret and
  * stays out of the published spec, exactly like the cron handlers (routes/cron.ts).
@@ -292,13 +371,21 @@ health.post('/health/email-test', async (c) => {
     EMAIL_FROM: process.env.EMAIL_FROM,
   })
 
-  return c.json(
-    {
-      resolvedFrom: from.value,
-      emailFromSource: from.source,
-      apiKeyPresent: isSet(process.env.RESEND_API_KEY),
-      send: await sendProbe(from.value, parsed.data.to),
-    },
-    200,
-  )
+  const base = {
+    resolvedFrom: from.value,
+    emailFromSource: from.source,
+    apiKeyPresent: isSet(process.env.RESEND_API_KEY),
+  }
+
+  if (parsed.data.mode === 'otp') {
+    // Random, never fixed: `sendOtpEmail` keys idempotency on `otp/<to>/<code>`
+    // and Resend dedupes that for 24h, so a constant code would make every call
+    // after the first replay the first result instead of really sending. Returned
+    // as `otpUsed` — a throwaway code for an address the caller just named, behind
+    // the same gate that already returns raw provider errors.
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0')
+    return c.json({ ...base, otpUsed: otp, send: await sendOtpProbe(parsed.data.to, otp) }, 200)
+  }
+
+  return c.json({ ...base, send: await sendProbe(from.value, parsed.data.to) }, 200)
 })
