@@ -193,5 +193,24 @@ export const PromoCodeCreate = PromoCodeFields
   .openapi('PromoCodeCreate')
 export type PromoCodeCreate = z.infer<typeof PromoCodeCreate>
 
-export const PromoCodeUpdate = PromoCodeFields.partial().openapi('PromoCodeUpdate')
+export const PromoCodeUpdate = PromoCodeFields.partial()
+  .refine(
+    (v) => {
+      if (v.discountValue == null) return true
+      // Conservative for a money path: if the patch doesn't specify discountType,
+      // we cannot confirm it's a FIXED promo, so a value >100 is rejected unless
+      // discountType === 'FIXED' is explicitly present in this patch.
+      if (v.discountType === 'FIXED') return true
+      return v.discountValue <= 100
+    },
+    {
+      message: 'A percent discount cannot exceed 100',
+      path: ['discountValue'],
+    },
+  )
+  .refine((v) => v.startsAt == null || v.expiresAt == null || v.expiresAt > v.startsAt, {
+    message: 'expiresAt must be after startsAt',
+    path: ['expiresAt'],
+  })
+  .openapi('PromoCodeUpdate')
 export type PromoCodeUpdate = z.infer<typeof PromoCodeUpdate>

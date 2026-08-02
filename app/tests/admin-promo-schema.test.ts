@@ -50,3 +50,25 @@ describe('PromoCodeCreate', () => {
     expect(() => PromoCodeUpdate.parse({})).not.toThrow()
   })
 })
+
+describe('PromoCodeUpdate refines (money path — a PATCH must not bypass validation)', () => {
+  it('rejects discountType PERCENT with discountValue 500', () => {
+    expect(() => PromoCodeUpdate.parse({ discountType: 'PERCENT', discountValue: 500 })).toThrow()
+  })
+
+  it('accepts discountType FIXED with discountValue 500', () => {
+    expect(PromoCodeUpdate.parse({ discountType: 'FIXED', discountValue: 500 }).discountValue).toBe(500)
+  })
+
+  it('accepts a patch with only expiresAt present (no startsAt)', () => {
+    expect(() => PromoCodeUpdate.parse({ expiresAt: 100 })).not.toThrow()
+  })
+
+  it('rejects a patch with both startsAt and expiresAt, inverted', () => {
+    expect(() => PromoCodeUpdate.parse({ startsAt: 200, expiresAt: 100 })).toThrow()
+  })
+
+  it('conservative policy: rejects discountValue 500 with no discountType in the patch, since it might be a percent promo', () => {
+    expect(() => PromoCodeUpdate.parse({ discountValue: 500 })).toThrow()
+  })
+})
