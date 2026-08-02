@@ -35,6 +35,13 @@ export interface CrudOptions {
   tag: string
   /** Singular noun for messages, e.g. 'service definition'. */
   noun?: string
+  /**
+   * Per-feature request schemas. When omitted the router keeps the historical
+   * `.passthrough()` behaviour, so features migrate one at a time without a
+   * flag day. See docs/superpowers/specs/2026-08-02-admin-payload-drift-addendum.md.
+   */
+  createSchema?: z.ZodTypeAny
+  updateSchema?: z.ZodTypeAny
 }
 
 const errs = {
@@ -47,6 +54,8 @@ export function crudRouter(opts: CrudOptions): OpenAPIHono<Env> {
   const router = createRouter()
   const { collection, tag } = opts
   const noun = opts.noun ?? 'record'
+  const createBody = opts.createSchema ?? FeatureCreate
+  const updateBody = opts.updateSchema ?? FeatureUpdate
 
   // All CRUD paths are admin-guarded.
   router.use('/', requireAdmin())
@@ -80,7 +89,7 @@ export function crudRouter(opts: CrudOptions): OpenAPIHono<Env> {
       path: '/',
       tags: [tag],
       security: [{ bearerAuth: [] }],
-      request: { body: { content: { 'application/json': { schema: FeatureCreate } } } },
+      request: { body: { content: { 'application/json': { schema: createBody } } } },
       responses: {
         201: { description: 'Created', content: { 'application/json': { schema: envelopeOf(FeatureOut) } } },
         ...errs,
@@ -125,7 +134,7 @@ export function crudRouter(opts: CrudOptions): OpenAPIHono<Env> {
       security: [{ bearerAuth: [] }],
       request: {
         params: IdParam,
-        body: { content: { 'application/json': { schema: FeatureUpdate } } },
+        body: { content: { 'application/json': { schema: updateBody } } },
       },
       responses: {
         200: { description: 'Updated', content: { 'application/json': { schema: envelopeOf(FeatureOut) } } },
