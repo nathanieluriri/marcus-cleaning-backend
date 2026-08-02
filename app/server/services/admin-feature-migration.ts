@@ -129,7 +129,21 @@ function flagForHumanReview(doc: RawDoc, legacyKey: string, ctx: MappingContext)
 }
 
 const isFiniteNumber = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
-const toNumber = (v: unknown): number => Number(v)
+/**
+ * Convert only genuine numeric values. `Number(null)`, `Number('')`,
+ * `Number('  ')`, `Number([])`, and `Number(false)` all evaluate to `0` in
+ * JavaScript, which would make a malformed legacy value (a null/blank
+ * price_minor, an empty discount_value) migrate as a real canonical `0`
+ * instead of being caught by `isFiniteNumber` and reported via `invalid`.
+ * Anything that is not a number or a non-empty numeric string yields `NaN`
+ * so `isValid` rejects it. A legitimate `price_minor: 0` (an actually-free
+ * add-on) still converts to `0` and is written normally.
+ */
+const toNumber = (v: unknown): number => {
+  if (typeof v === 'number') return v
+  if (typeof v === 'string' && v.trim() !== '') return Number(v)
+  return Number.NaN
+}
 
 /**
  * Maps known legacy `discount_type` spellings onto the schema's strict
@@ -142,6 +156,38 @@ function normalizeLegacyDiscountType(v: unknown): 'PERCENT' | 'FIXED' | null {
   if (normalized === 'percentage' || normalized === 'percent' || normalized === '%') return 'PERCENT'
   if (normalized === 'fixed' || normalized === 'amount' || normalized === 'flat') return 'FIXED'
   return null
+}
+
+/**
+ * Canonical keys that `mapField` writes by normalising a value already
+ * stored under THAT SAME key, rather than by copying from a distinct legacy
+ * key. `code` (promo codes: trim + uppercase in place) is the only current
+ * example. These must NOT get an "absent" guard in `buildUpdateFilter`,
+ * because the key is never absent — guarding it would make the filter
+ * unsatisfiable and the normalisation would never write.
+ */
+const IN_PLACE_NORMALISED_KEYS = new Set<string>(['code'])
+
+/**
+ * Builds the Mongo filter for writing `patch` (Finding 2 / re-check own
+ * precondition): the cursor read the document once, at the start of a long
+ * scan-and-write pass over a live collection. By the time this document's
+ * write happens, an admin could have set one of the canonical fields through
+ * the console — that value must win over the stale legacy one.
+ *
+ * For every canonical key in `patch` that is a genuinely new field (i.e. not
+ * in `IN_PLACE_NORMALISED_KEYS`), add `{ [key]: { $exists: false } }` to the
+ * filter, so the write becomes a no-op if that field appeared after the
+ * cursor read it. The migration is idempotent, so the next run just picks
+ * the document up again — nothing is lost, only deferred.
+ */
+export function buildUpdateFilter(docId: unknown, patch: Record<string, unknown>): Record<string, unknown> {
+  const filter: Record<string, unknown> = { _id: docId }
+  for (const key of Object.keys(patch)) {
+    if (IN_PLACE_NORMALISED_KEYS.has(key)) continue
+    filter[key] = { $exists: false }
+  }
+  return filter
 }
 
 function toResult(doc: RawDoc, ctx: MappingContext): MigrationResult {
@@ -161,7 +207,15 @@ function toResult(doc: RawDoc, ctx: MappingContext): MigrationResult {
 export function migrateServiceDefinition(doc: RawDoc): MigrationResult {
   const ctx = newContext()
   mapField(doc, 'display_name', 'title', ctx)
+  // `name` / `active` are a second legacy spelling `catalog-service.ts`
+  // already falls back to at read time (`d.title ?? d.name`, `d.isAvailable
+  // ?? d.active`), so mapping them here is consistent with what consumers
+  // already treat as equivalent — not a behaviour change, just making the
+  // canonical field explicit so the census/runner stop bucketing these
+  // documents as "unrecognised".
+  mapField(doc, 'name', 'title', ctx)
   mapField(doc, 'is_active', 'isAvailable', ctx)
+  mapField(doc, 'active', 'isAvailable', ctx)
   mapField(doc, 'notes', 'description', ctx)
   // `base_duration_minutes` is deliberately NOT mapped to `minimumHours` — see
   // Finding 3: on hourly services minimumHours is a pricing floor, not the
@@ -177,7 +231,9 @@ export function migrateAddOn(doc: RawDoc): MigrationResult {
   // Add-ons carry the same legacy vocabulary as service definitions
   // (Finding 1): a disabled/unnamed legacy add-on must not silently go live.
   mapField(doc, 'display_name', 'title', ctx)
+  mapField(doc, 'name', 'title', ctx)
   mapField(doc, 'is_active', 'isAvailable', ctx)
+  mapField(doc, 'active', 'isAvailable', ctx)
   mapField(doc, 'notes', 'description', ctx)
   mapField(doc, 'price_minor', 'price', ctx, {
     transform: (v) => toNumber(v) / 100,

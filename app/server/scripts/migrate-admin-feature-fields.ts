@@ -29,8 +29,9 @@
  *   npx tsx server/scripts/migrate-admin-feature-fields.ts --apply     # writes patches
  */
 
-import { getDb } from '@/server/core/mongo'
+import { closeClient, getDb } from '@/server/core/mongo'
 import {
+  buildUpdateFilter,
   migrateAddOn,
   migratePromoCode,
   migrateServiceDefinition,
@@ -115,7 +116,9 @@ async function runCollection(spec: CollectionSpec, apply: boolean): Promise<Coll
     } else if (result.changed) {
       summary.migrated += 1
       if (apply) {
-        await coll.updateOne({ _id: doc._id }, { $set: result.patch })
+        // Finding 2: re-check the precondition at write time, not just at
+        // read time — see `buildUpdateFilter` for why.
+        await coll.updateOne(buildUpdateFilter(doc._id, result.patch), { $set: result.patch })
       }
     } else if (result.recognised) {
       summary.skippedAlreadyCanonical += 1
@@ -226,8 +229,14 @@ async function main(): Promise<void> {
 }
 
 main()
-  .then(() => process.exit(0))
-  .catch((err) => {
+  .then(async () => {
+    await closeClient()
+  })
+  .catch(async (err) => {
     console.error(err)
-    process.exit(1)
+    await closeClient()
+    // Finding 3: use `process.exitCode` + let Node exit naturally, instead
+    // of `process.exit`, which can truncate buffered stdout/stderr and skips
+    // the client-close path entirely.
+    process.exitCode = 1
   })

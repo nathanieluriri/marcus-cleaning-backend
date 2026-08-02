@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildUpdateFilter,
   migrateAddOn,
   migratePromoCode,
   migrateServiceDefinition,
@@ -113,6 +114,73 @@ describe('migrateAddOn', () => {
     expect(invalid).toContain('price_minor')
     expect(changed).toBe(false)
   })
+
+  // Finding 1: `Number(null)`, `Number('')`, `Number('  ')`, `Number([])`,
+  // and `Number(false)` all evaluate to 0 in JS. Each of these malformed
+  // legacy values must be reported as invalid, never silently written as a
+  // canonical price of 0 (which would look like a genuinely free add-on and
+  // hide the exact bug this migration exists to fix).
+  it.each([
+    ['null', null],
+    ['empty string', ''],
+    ['whitespace-only string', '  '],
+    ['an array', []],
+    ['false', false],
+  ])('reports price_minor: %s as invalid, not as a canonical price of 0', (_label, value) => {
+    const { patch, invalid, changed } = migrateAddOn({ price_minor: value })
+    expect(patch.price).toBeUndefined()
+    expect(invalid).toContain('price_minor')
+    expect(changed).toBe(false)
+  })
+
+  // Chosen semantic: a legacy `price_minor: 0` means "genuinely free" and is
+  // a legitimate value, distinct from the malformed inputs above — it must
+  // still convert and write normally.
+  it('still migrates a genuine price_minor of 0 (a real free add-on) to price: 0', () => {
+    const { patch, invalid, changed } = migrateAddOn({ price_minor: 0 })
+    expect(patch.price).toBe(0)
+    expect(invalid).not.toContain('price_minor')
+    expect(changed).toBe(true)
+  })
+
+  // Finding 5: `name` / `active` are a second legacy spelling that
+  // `catalog-service.ts` already falls back to when reading — map them so
+  // documents using this spelling stop showing up as "unrecognised".
+  it('maps name to title and active to isAvailable', () => {
+    const { patch, recognised } = migrateAddOn({ name: 'Window Clean', active: true })
+    expect(patch.title).toBe('Window Clean')
+    expect(patch.isAvailable).toBe(true)
+    expect(recognised).toBe(true)
+  })
+})
+
+describe('buildUpdateFilter', () => {
+  // Finding 2: the write must re-check its own precondition, because the
+  // read (cursor) and the write happen far apart in time during a long scan
+  // of a live collection.
+  it('adds an absent-field guard for each new canonical key in the patch', () => {
+    const filter = buildUpdateFilter('doc-1', { title: 'X', isAvailable: true })
+    expect(filter).toEqual({
+      _id: 'doc-1',
+      title: { $exists: false },
+      isAvailable: { $exists: false },
+    })
+  })
+
+  // `code` is normalised in place (same key holds the legacy and canonical
+  // value), so it is never "absent" and must not get a guard — guarding it
+  // would make the filter unsatisfiable and the normalisation would never write.
+  it('does not guard the code key, since it is normalised in place rather than copied from a distinct legacy key', () => {
+    const filter = buildUpdateFilter('doc-2', { code: 'SAVE10', discountType: 'PERCENT' })
+    expect(filter).toEqual({
+      _id: 'doc-2',
+      discountType: { $exists: false },
+    })
+  })
+
+  it('produces just the _id filter when the patch is empty', () => {
+    expect(buildUpdateFilter('doc-3', {})).toEqual({ _id: 'doc-3' })
+  })
 })
 
 describe('migratePromoCode', () => {
@@ -143,9 +211,12 @@ describe('migratePromoCode', () => {
     expect(changed).toBe(false)
   })
 
-  it('reports a conflict when an unrecognised legacy discount_type disagrees with an existing canonical value', () => {
-    // Canonical already set — legacy is not touched or flagged, since nothing
-    // would be written even if it were recognised.
+  it('flags an unrecognised legacy discount_type for human review even when a canonical value already exists, without reporting a conflict', () => {
+    // The legacy value is unrecognised, so it is never compared against the
+    // canonical value at all (there is nothing to compare — normalization
+    // failed first) and therefore cannot produce a `conflicts` entry. It is
+    // still surfaced via `flagged` so a human can decide whether the legacy
+    // spelling needs a new mapping.
     const { patch, conflicts, flagged } = migratePromoCode({
       discount_type: 'buy_one_get_one',
       discountType: 'PERCENT',

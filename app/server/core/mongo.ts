@@ -38,4 +38,17 @@ export function getDb(): Db {
   return getClient().db(getSettings().DB_NAME)
 }
 
+/**
+ * Closes the cached client and clears the module-scope reference, so a
+ * one-off script (e.g. `server/scripts/migrate-admin-feature-fields.ts`) can
+ * exit cleanly instead of leaving the process alive on an open socket. Safe
+ * to call even if the client was never built.
+ */
+export async function closeClient(): Promise<void> {
+  if (!g._mongoClient) return
+  const client = g._mongoClient
+  g._mongoClient = undefined
+  await client.close()
+}
+
 export { getClient }
