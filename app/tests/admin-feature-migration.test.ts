@@ -120,8 +120,39 @@ describe('migratePromoCode', () => {
     expect(migratePromoCode({ discount_value: 10 }).patch.discountValue).toBe(10)
   })
 
-  it('uppercases discount_type', () => {
+  // Finding 2: `discountType` is a strict enum (`'PERCENT' | 'FIXED'`) — a
+  // naive uppercase of the console's old `percentage` placeholder produces
+  // `"PERCENTAGE"`, which the schema rejects and makes the promo uneditable.
+  // Legacy spellings are mapped explicitly instead.
+  it('maps known percent spellings to PERCENT', () => {
     expect(migratePromoCode({ discount_type: 'percent' }).patch.discountType).toBe('PERCENT')
+    expect(migratePromoCode({ discount_type: 'percentage' }).patch.discountType).toBe('PERCENT')
+    expect(migratePromoCode({ discount_type: '%' }).patch.discountType).toBe('PERCENT')
+  })
+
+  it('maps known fixed spellings to FIXED', () => {
+    expect(migratePromoCode({ discount_type: 'fixed' }).patch.discountType).toBe('FIXED')
+    expect(migratePromoCode({ discount_type: 'amount' }).patch.discountType).toBe('FIXED')
+    expect(migratePromoCode({ discount_type: 'flat' }).patch.discountType).toBe('FIXED')
+  })
+
+  it('does not map an unrecognised discount_type, and flags it for human review', () => {
+    const { patch, flagged, changed } = migratePromoCode({ discount_type: 'buy_one_get_one' })
+    expect(patch.discountType).toBeUndefined()
+    expect(flagged).toContain('discount_type')
+    expect(changed).toBe(false)
+  })
+
+  it('reports a conflict when an unrecognised legacy discount_type disagrees with an existing canonical value', () => {
+    // Canonical already set — legacy is not touched or flagged, since nothing
+    // would be written even if it were recognised.
+    const { patch, conflicts, flagged } = migratePromoCode({
+      discount_type: 'buy_one_get_one',
+      discountType: 'PERCENT',
+    })
+    expect(patch.discountType).toBeUndefined()
+    expect(conflicts).toEqual([])
+    expect(flagged).toContain('discount_type')
   })
 
   it('maps is_active to active, preserving false', () => {

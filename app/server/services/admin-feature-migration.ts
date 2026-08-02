@@ -131,6 +131,19 @@ function flagForHumanReview(doc: RawDoc, legacyKey: string, ctx: MappingContext)
 const isFiniteNumber = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
 const toNumber = (v: unknown): number => Number(v)
 
+/**
+ * Maps known legacy `discount_type` spellings onto the schema's strict
+ * `'PERCENT' | 'FIXED'` enum. Returns `null` for anything unrecognised so
+ * the caller can flag it for human review instead of writing a value the
+ * schema will reject.
+ */
+function normalizeLegacyDiscountType(v: unknown): 'PERCENT' | 'FIXED' | null {
+  const normalized = String(v).trim().toLowerCase()
+  if (normalized === 'percentage' || normalized === 'percent' || normalized === '%') return 'PERCENT'
+  if (normalized === 'fixed' || normalized === 'amount' || normalized === 'flat') return 'FIXED'
+  return null
+}
+
 function toResult(doc: RawDoc, ctx: MappingContext): MigrationResult {
   const recognised = Object.keys(doc).some((key) => ctx.knownKeys.has(key))
   const withheldKeys = ctx.conflicts.length > 0 ? Object.keys(ctx.patch) : []
@@ -179,9 +192,34 @@ export function migratePromoCode(doc: RawDoc): MigrationResult {
     transform: toNumber,
     isValid: isFiniteNumber,
   })
-  mapField(doc, 'discount_type', 'discountType', ctx, {
-    transform: (v) => String(v).toUpperCase(),
-  })
+  // `discountType` is a strict `z.enum(['PERCENT', 'FIXED'])` (see
+  // `PromoCodeFields` in `server/schemas/admin-features.ts`). Naively
+  // uppercasing the legacy value (e.g. the console's old `percentage`
+  // placeholder) produces `"PERCENTAGE"`, which the schema rejects: the
+  // migrated promo becomes uneditable (blank radio, 422 on PATCH). Map the
+  // known legacy spellings explicitly; anything else is deliberately left
+  // unmapped and flagged for a human, rather than writing a value the schema
+  // will never accept.
+  ctx.knownKeys.add('discount_type')
+  ctx.knownKeys.add('discountType')
+  if ('discount_type' in doc) {
+    const normalized = normalizeLegacyDiscountType(doc.discount_type)
+    if (normalized === null) {
+      flagForHumanReview(doc, 'discount_type', ctx)
+    } else if ('discountType' in doc) {
+      const canonicalValue = doc.discountType
+      if (canonicalValue !== normalized) {
+        ctx.conflicts.push({
+          legacyKey: 'discount_type',
+          canonicalKey: 'discountType',
+          legacyValue: doc.discount_type,
+          canonicalValue,
+        })
+      }
+    } else {
+      ctx.patch.discountType = normalized
+    }
+  }
   mapField(doc, 'is_active', 'active', ctx)
   mapField(doc, 'valid_from_epoch', 'startsAt', ctx, {
     transform: toNumber,

@@ -141,7 +141,10 @@ export const AddOnCreate = z
     price: z.number().nonnegative(),
     currency: z.string().min(1).optional(),
     isAvailable: z.boolean().optional(),
-    serviceId: z.string().min(1).optional(),
+    // `.nullable()` lets an admin explicitly un-scope an existing add-on: on a
+    // PATCH, omitting the key means the backend never touches it (Finding 3),
+    // so the console must be able to send `serviceId: null` to actually clear it.
+    serviceId: z.string().min(1).nullable().optional(),
     description: z.string().optional(),
     checklist: z.array(z.string()).optional(),
     /** Internal key, no consumer reads it. */
