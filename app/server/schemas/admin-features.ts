@@ -214,3 +214,54 @@ export const PromoCodeUpdate = PromoCodeFields.partial()
   })
   .openapi('PromoCodeUpdate')
 export type PromoCodeUpdate = z.infer<typeof PromoCodeUpdate>
+
+/**
+ * `service_area_boundary` and `dynamic_pricing_rule` have NO backend consumers —
+ * nothing reads them today. Field names are therefore left exactly as the admin
+ * console already writes them: with no reader there is no canonical vocabulary to
+ * match, and renaming would be pure churn. These schemas add validation only.
+ */
+export const ServiceAreaCreate = z
+  .object({
+    zone_code: z.string().min(1),
+    display_name: z.string().min(1),
+    zip_codes: z.array(z.string()).optional(),
+    boundary_geojson: z
+      .string()
+      .optional()
+      .refine((v) => {
+        if (v == null || v === '') return true
+        try {
+          JSON.parse(v)
+          return true
+        } catch {
+          return false
+        }
+      }, { message: 'boundary_geojson must be valid JSON' }),
+    is_active: z.boolean().optional(),
+  })
+  .openapi('ServiceAreaCreate')
+export type ServiceAreaCreate = z.infer<typeof ServiceAreaCreate>
+
+export const ServiceAreaUpdate = ServiceAreaCreate.partial().openapi('ServiceAreaUpdate')
+export type ServiceAreaUpdate = z.infer<typeof ServiceAreaUpdate>
+
+export const PricingRuleType = z.enum(['time_window', 'day_of_week', 'zone', 'demand'])
+
+export const PricingRuleCreate = z
+  .object({
+    rule_name: z.string().min(1),
+    rule_type: PricingRuleType,
+    multiplier: z.number().positive(),
+    priority: z.number().int(),
+    zone_codes: z.array(z.string()).optional(),
+    day_of_week: z.array(z.string()).optional(),
+    start_hour: z.number().int().min(0).max(23).optional(),
+    end_hour: z.number().int().min(0).max(23).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .openapi('PricingRuleCreate')
+export type PricingRuleCreate = z.infer<typeof PricingRuleCreate>
+
+export const PricingRuleUpdate = PricingRuleCreate.partial().openapi('PricingRuleUpdate')
+export type PricingRuleUpdate = z.infer<typeof PricingRuleUpdate>

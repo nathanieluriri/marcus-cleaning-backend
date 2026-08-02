@@ -7,6 +7,10 @@ import {
   AddOnUpdate,
   PromoCodeCreate,
   PromoCodeUpdate,
+  ServiceAreaCreate,
+  ServiceAreaUpdate,
+  PricingRuleCreate,
+  PricingRuleUpdate,
 } from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
@@ -38,8 +42,20 @@ const addOns = crudRouter({
   createSchema: AddOnCreate,
   updateSchema: AddOnUpdate,
 })
-const pricingRules = crudRouter({ collection: 'dynamic_pricing_rule', tag: 'PricingRules', noun: 'pricing rule' })
-const serviceAreas = crudRouter({ collection: 'service_area_boundary', tag: 'ServiceAreas', noun: 'service area' })
+const pricingRules = crudRouter({
+  collection: 'dynamic_pricing_rule',
+  tag: 'PricingRules',
+  noun: 'pricing rule',
+  createSchema: PricingRuleCreate,
+  updateSchema: PricingRuleUpdate,
+})
+const serviceAreas = crudRouter({
+  collection: 'service_area_boundary',
+  tag: 'ServiceAreas',
+  noun: 'service area',
+  createSchema: ServiceAreaCreate,
+  updateSchema: ServiceAreaUpdate,
+})
 const cleanerTags = crudRouter({ collection: 'cleaner_skill_equipment_tag', tag: 'CleanerTags', noun: 'cleaner tag' })
 const availabilityOverrides = crudRouter({ collection: 'availability_override', tag: 'AvailabilityOverrides', noun: 'availability override' })
 const promoCodes = crudRouter({
