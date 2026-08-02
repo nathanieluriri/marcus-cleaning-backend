@@ -1,5 +1,6 @@
 import { createRouter } from '@/server/core/router'
 import { crudRouter } from './_crud'
+import { ServiceDefinitionCreate, ServiceDefinitionUpdate } from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
 import { conciergeBookings } from './concierge-bookings'
@@ -16,7 +17,13 @@ import { claimReviews } from './claim-reviews'
  */
 
 // --- plain CRUD features (collection names per docs/migration/02-data-model.md) ---
-const serviceDefinitions = crudRouter({ collection: 'service_definitions', tag: 'ServiceDefinitions', noun: 'service definition' })
+const serviceDefinitions = crudRouter({
+  collection: 'service_definitions',
+  tag: 'ServiceDefinitions',
+  noun: 'service definition',
+  createSchema: ServiceDefinitionCreate,
+  updateSchema: ServiceDefinitionUpdate,
+})
 const addOns = crudRouter({ collection: 'addon_catalog', tag: 'AddOns', noun: 'add-on' })
 const pricingRules = crudRouter({ collection: 'dynamic_pricing_rule', tag: 'PricingRules', noun: 'pricing rule' })
 const serviceAreas = crudRouter({ collection: 'service_area_boundary', tag: 'ServiceAreas', noun: 'service area' })

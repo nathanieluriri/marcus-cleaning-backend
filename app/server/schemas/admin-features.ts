@@ -84,3 +84,43 @@ export type ClaimDecision = z.infer<typeof ClaimDecision>
 export const CustomerIdParam = z.object({
   customer_id: z.string().openapi({ param: { name: 'customer_id', in: 'path' } }),
 })
+
+/** How a service is priced. Mirrors `PriceUnit` in `server/schemas/catalog.ts`. */
+export const AdminPriceUnit = z.enum(['HOURLY', 'FLAT'])
+
+/**
+ * Canonical create body for `service_definitions`.
+ *
+ * Field names are the ones the consumers actually read — see `catalog-service.ts`
+ * (`title ?? name`, `basePrice ?? price`, `isAvailable ?? active`) and
+ * `pricing-service.ts`. The admin console previously wrote `display_name` /
+ * `is_active` / `base_duration_minutes`, which no consumer reads, so services
+ * rendered as "Service" with no price and could not be deactivated.
+ *
+ * Plain object (not `.passthrough()`, not `.strict()`): unknown keys are stripped,
+ * which drops legacy snake_case without 422-ing a client mid-deploy.
+ */
+export const ServiceDefinitionCreate = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    /** Major units. `pricing-service.ts` is the authority on this. */
+    basePrice: z.number().nonnegative().optional(),
+    hourlyRate: z.number().nonnegative().optional(),
+    minimumHours: z.number().positive().optional(),
+    maximumHours: z.number().positive().optional(),
+    hourIncrement: z.number().positive().optional(),
+    priceUnit: AdminPriceUnit.optional(),
+    currency: z.string().min(1).optional(),
+    isAvailable: z.boolean().optional(),
+    checklist: z.array(z.string()).optional(),
+    /** Internal key, no consumer reads it; retained so admins keep their handle. */
+    service_key: z.string().optional(),
+  })
+  .openapi('ServiceDefinitionCreate')
+export type ServiceDefinitionCreate = z.infer<typeof ServiceDefinitionCreate>
+
+export const ServiceDefinitionUpdate = ServiceDefinitionCreate.partial().openapi(
+  'ServiceDefinitionUpdate',
+)
+export type ServiceDefinitionUpdate = z.infer<typeof ServiceDefinitionUpdate>
