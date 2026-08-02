@@ -61,9 +61,19 @@ describe('PricingRuleCreate', () => {
     ).toThrow()
   })
 
-  it('rejects an unknown rule type', () => {
+  it('accepts an arbitrary non-empty rule type (no backend contract to validate against)', () => {
+    const parsed = PricingRuleCreate.parse({
+      rule_name: 'X',
+      rule_type: 'made_up',
+      multiplier: 1,
+      priority: 1,
+    })
+    expect(parsed.rule_type).toBe('made_up')
+  })
+
+  it('rejects an empty rule type', () => {
     expect(() =>
-      PricingRuleCreate.parse({ rule_name: 'X', rule_type: 'made_up', multiplier: 1, priority: 1 }),
+      PricingRuleCreate.parse({ rule_name: 'X', rule_type: '', multiplier: 1, priority: 1 }),
     ).toThrow()
   })
 })

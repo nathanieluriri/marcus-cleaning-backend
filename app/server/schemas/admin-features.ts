@@ -226,6 +226,7 @@ export const ServiceAreaCreate = z
     zone_code: z.string().min(1),
     display_name: z.string().min(1),
     zip_codes: z.array(z.string()).optional(),
+    /** Only checks that the string parses as JSON, not that it is valid GeoJSON (e.g. `"123"` passes). */
     boundary_geojson: z
       .string()
       .optional()
@@ -246,12 +247,19 @@ export type ServiceAreaCreate = z.infer<typeof ServiceAreaCreate>
 export const ServiceAreaUpdate = ServiceAreaCreate.partial().openapi('ServiceAreaUpdate')
 export type ServiceAreaUpdate = z.infer<typeof ServiceAreaUpdate>
 
-export const PricingRuleType = z.enum(['time_window', 'day_of_week', 'zone', 'demand'])
+/**
+ * Common `rule_type` values, for the admin UI's guided picker (Task 12) only.
+ * Not a Zod enum and not used for validation: `dynamic_pricing_rule` has no
+ * backend consumer, so there is no contract anchoring this list, and enforcing
+ * it here would risk rejecting a PATCH of a legitimate record stored with a
+ * `rule_type` outside this set. The UI guides; the API does not reject.
+ */
+export const COMMON_PRICING_RULE_TYPES = ['time_window', 'day_of_week', 'zone', 'demand'] as const
 
 export const PricingRuleCreate = z
   .object({
     rule_name: z.string().min(1),
-    rule_type: PricingRuleType,
+    rule_type: z.string().min(1),
     multiplier: z.number().positive(),
     priority: z.number().int(),
     zone_codes: z.array(z.string()).optional(),
