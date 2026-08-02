@@ -152,3 +152,46 @@ export type AddOnCreate = z.infer<typeof AddOnCreate>
 
 export const AddOnUpdate = AddOnCreate.partial().openapi('AddOnUpdate')
 export type AddOnUpdate = z.infer<typeof AddOnUpdate>
+
+export const AdminDiscountType = z.enum(['PERCENT', 'FIXED'])
+
+/**
+ * Canonical create body for `promo_code`.
+ *
+ * `promotion-service.ts` reads `discountValue ?? value ?? percentage` and falls
+ * back to 0, so the admin console's `discount_value` produced promos that applied
+ * no discount. `active` (not `is_active`) is the flag `isActive()` reads; a missing
+ * flag is treated as ACTIVE by design there, which made deactivation inert.
+ */
+const PromoCodeFields = z.object({
+  code: z.string().min(1).transform((v) => v.trim().toUpperCase()),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  discountType: AdminDiscountType,
+  discountValue: z.number().positive(),
+  minimumSpend: z.number().nonnegative().optional(),
+  maximumDiscount: z.number().nonnegative().optional(),
+  currency: z.string().min(1).optional(),
+  imageUrl: z.string().optional(),
+  /** Epoch seconds. */
+  startsAt: z.number().int().optional(),
+  expiresAt: z.number().int().optional(),
+  active: z.boolean().optional(),
+  applicableServices: z.array(z.string()).optional(),
+  maxRedemptions: z.number().int().positive().optional(),
+})
+
+export const PromoCodeCreate = PromoCodeFields
+  .refine((v) => v.discountType !== 'PERCENT' || v.discountValue <= 100, {
+    message: 'A percent discount cannot exceed 100',
+    path: ['discountValue'],
+  })
+  .refine((v) => v.startsAt == null || v.expiresAt == null || v.expiresAt > v.startsAt, {
+    message: 'expiresAt must be after startsAt',
+    path: ['expiresAt'],
+  })
+  .openapi('PromoCodeCreate')
+export type PromoCodeCreate = z.infer<typeof PromoCodeCreate>
+
+export const PromoCodeUpdate = PromoCodeFields.partial().openapi('PromoCodeUpdate')
+export type PromoCodeUpdate = z.infer<typeof PromoCodeUpdate>

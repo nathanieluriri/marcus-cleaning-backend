@@ -5,6 +5,8 @@ import {
   ServiceDefinitionUpdate,
   AddOnCreate,
   AddOnUpdate,
+  PromoCodeCreate,
+  PromoCodeUpdate,
 } from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
@@ -40,7 +42,13 @@ const pricingRules = crudRouter({ collection: 'dynamic_pricing_rule', tag: 'Pric
 const serviceAreas = crudRouter({ collection: 'service_area_boundary', tag: 'ServiceAreas', noun: 'service area' })
 const cleanerTags = crudRouter({ collection: 'cleaner_skill_equipment_tag', tag: 'CleanerTags', noun: 'cleaner tag' })
 const availabilityOverrides = crudRouter({ collection: 'availability_override', tag: 'AvailabilityOverrides', noun: 'availability override' })
-const promoCodes = crudRouter({ collection: 'promo_code', tag: 'PromoCodes', noun: 'promo code' })
+const promoCodes = crudRouter({
+  collection: 'promo_code',
+  tag: 'PromoCodes',
+  noun: 'promo code',
+  createSchema: PromoCodeCreate,
+  updateSchema: PromoCodeUpdate,
+})
 const payoutAdjustments = crudRouter({ collection: 'payout_adjustment', tag: 'PayoutAdjustments', noun: 'payout adjustment' })
 const chatInterventions = crudRouter({ collection: 'chat_intervention', tag: 'ChatInterventions', noun: 'chat intervention' })
 
