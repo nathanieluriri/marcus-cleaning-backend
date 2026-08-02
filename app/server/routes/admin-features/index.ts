@@ -1,6 +1,11 @@
 import { createRouter } from '@/server/core/router'
 import { crudRouter } from './_crud'
-import { ServiceDefinitionCreate, ServiceDefinitionUpdate } from '@/server/schemas/admin-features'
+import {
+  ServiceDefinitionCreate,
+  ServiceDefinitionUpdate,
+  AddOnCreate,
+  AddOnUpdate,
+} from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
 import { conciergeBookings } from './concierge-bookings'
@@ -24,7 +29,13 @@ const serviceDefinitions = crudRouter({
   createSchema: ServiceDefinitionCreate,
   updateSchema: ServiceDefinitionUpdate,
 })
-const addOns = crudRouter({ collection: 'addon_catalog', tag: 'AddOns', noun: 'add-on' })
+const addOns = crudRouter({
+  collection: 'addon_catalog',
+  tag: 'AddOns',
+  noun: 'add-on',
+  createSchema: AddOnCreate,
+  updateSchema: AddOnUpdate,
+})
 const pricingRules = crudRouter({ collection: 'dynamic_pricing_rule', tag: 'PricingRules', noun: 'pricing rule' })
 const serviceAreas = crudRouter({ collection: 'service_area_boundary', tag: 'ServiceAreas', noun: 'service area' })
 const cleanerTags = crudRouter({ collection: 'cleaner_skill_equipment_tag', tag: 'CleanerTags', noun: 'cleaner tag' })

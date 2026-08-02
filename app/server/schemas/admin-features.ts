@@ -124,3 +124,31 @@ export const ServiceDefinitionUpdate = ServiceDefinitionCreate.partial().openapi
   'ServiceDefinitionUpdate',
 )
 export type ServiceDefinitionUpdate = z.infer<typeof ServiceDefinitionUpdate>
+
+/**
+ * Canonical create body for `addon_catalog`.
+ *
+ * `price` is REQUIRED and in major units. `catalog-service.ts:139` reads
+ * `num(d.price) ?? 0`, so the admin console's old `price_minor` meant every
+ * admin-created add-on was free.
+ *
+ * `serviceId` is optional: `listServiceExtras` treats an unlinked add-on as
+ * global (applies to every service).
+ */
+export const AddOnCreate = z
+  .object({
+    title: z.string().min(1),
+    price: z.number().nonnegative(),
+    currency: z.string().min(1).optional(),
+    isAvailable: z.boolean().optional(),
+    serviceId: z.string().min(1).optional(),
+    description: z.string().optional(),
+    checklist: z.array(z.string()).optional(),
+    /** Internal key, no consumer reads it. */
+    addon_key: z.string().optional(),
+  })
+  .openapi('AddOnCreate')
+export type AddOnCreate = z.infer<typeof AddOnCreate>
+
+export const AddOnUpdate = AddOnCreate.partial().openapi('AddOnUpdate')
+export type AddOnUpdate = z.infer<typeof AddOnUpdate>
