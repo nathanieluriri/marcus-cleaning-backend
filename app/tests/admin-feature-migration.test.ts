@@ -80,6 +80,27 @@ describe('migrateAddOn', () => {
     ])
   })
 
+  // Round-2 finding: a conflicting field must not silently swallow a sibling
+  // clean-field migration on the SAME document. Conservative behaviour (do
+  // not write the document at all) is correct, but the withholding of the
+  // clean `title` migration must be visible via `withheldKeys`.
+  it('reports a withheld clean-field migration when a sibling field on the same document conflicts', () => {
+    const { patch, conflicts, withheldKeys, changed } = migrateAddOn({
+      price_minor: 2500,
+      price: 30,
+      display_name: 'Oven Clean',
+    })
+    // The clean field is still computed...
+    expect(patch.title).toBe('Oven Clean')
+    expect(patch.price).toBeUndefined()
+    // ...but the document must not be treated as write-safe: it has a conflict,
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0].legacyKey).toBe('price_minor')
+    // ...and the runner must be told, by name, which clean migration it is withholding.
+    expect(withheldKeys).toEqual(['title'])
+    expect(changed).toBe(true)
+  })
+
   it('is recognised when it carries a known legacy/canonical key, unrecognised otherwise', () => {
     expect(migrateAddOn({ price_minor: 2500 }).recognised).toBe(true)
     expect(migrateAddOn({ some_unrelated_field: 1 }).recognised).toBe(false)

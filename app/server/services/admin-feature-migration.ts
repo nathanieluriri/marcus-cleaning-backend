@@ -22,6 +22,13 @@
  *    `conflict`, not silently swallowed.
  *  - Never write NaN / non-finite numbers: a malformed legacy value is
  *    reported via `invalid`, never copied into `patch`.
+ *  - Never partially write a conflicted document: when ANY field on a
+ *    document conflicts, the whole document is withheld from `--apply` (see
+ *    the runner). Because `patch` still accumulates every OTHER field that
+ *    migrated cleanly, those clean entries would otherwise be silently
+ *    dropped along with the conflicting one. `withheldKeys` makes that loss
+ *    visible instead: it lists exactly which canonical keys were computed
+ *    but not written because a sibling field on the same document conflicts.
  */
 
 export interface FieldConflict {
@@ -42,6 +49,14 @@ export interface MigrationResult {
   invalid: string[]
   /** True if the document has at least one key this function knows how to interpret (legacy or canonical). */
   recognised: boolean
+  /**
+   * Canonical keys that migrated cleanly (are present in `patch`) but will be
+   * withheld from the write because `conflicts` is non-empty for this same
+   * document — i.e. `conflicts.length > 0 ? Object.keys(patch) : []`.
+   * Re-running the migration after the conflict is resolved by hand applies
+   * these automatically, because the migration is idempotent.
+   */
+  withheldKeys: string[]
 }
 
 type RawDoc = Record<string, unknown>
@@ -118,6 +133,7 @@ const toNumber = (v: unknown): number => Number(v)
 
 function toResult(doc: RawDoc, ctx: MappingContext): MigrationResult {
   const recognised = Object.keys(doc).some((key) => ctx.knownKeys.has(key))
+  const withheldKeys = ctx.conflicts.length > 0 ? Object.keys(ctx.patch) : []
   return {
     changed: Object.keys(ctx.patch).length > 0,
     patch: ctx.patch,
@@ -125,6 +141,7 @@ function toResult(doc: RawDoc, ctx: MappingContext): MigrationResult {
     flagged: ctx.flagged,
     invalid: ctx.invalid,
     recognised,
+    withheldKeys,
   }
 }
 

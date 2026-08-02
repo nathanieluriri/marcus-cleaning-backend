@@ -59,6 +59,9 @@ interface CollectionSummary {
   invalid: number
   flaggedForHumanReview: number
   conflictIds: string[]
+  /** _id -> canonical keys that migrated cleanly but were withheld because a sibling field conflicts. */
+  withheldByConflictId: Record<string, string[]>
+  withheldFieldTotal: number
   flaggedFieldCounts: Record<string, number>
 }
 
@@ -81,6 +84,8 @@ async function runCollection(spec: CollectionSpec, apply: boolean): Promise<Coll
     invalid: 0,
     flaggedForHumanReview: 0,
     conflictIds: [],
+    withheldByConflictId: {},
+    withheldFieldTotal: 0,
     flaggedFieldCounts: {},
   }
 
@@ -101,7 +106,12 @@ async function runCollection(spec: CollectionSpec, apply: boolean): Promise<Coll
     // same doc would also migrate cleanly.
     if (result.conflicts.length > 0) {
       summary.conflicting += 1
-      summary.conflictIds.push(String((doc as Record<string, unknown>)._id))
+      const id = String((doc as Record<string, unknown>)._id)
+      summary.conflictIds.push(id)
+      if (result.withheldKeys.length > 0) {
+        summary.withheldByConflictId[id] = result.withheldKeys
+        summary.withheldFieldTotal += result.withheldKeys.length
+      }
     } else if (result.changed) {
       summary.migrated += 1
       if (apply) {
@@ -177,6 +187,14 @@ async function runMigration(apply: boolean): Promise<void> {
     if (s.conflictIds.length > 0) {
       console.log(`    conflicting _ids: ${s.conflictIds.join(', ')}`)
     }
+    if (s.withheldFieldTotal > 0) {
+      console.log(
+        `    conflicting: ${s.conflicting} documents, withholding ${s.withheldFieldTotal} clean field migrations`,
+      )
+      for (const [id, keys] of Object.entries(s.withheldByConflictId)) {
+        console.log(`      ${id}: withheld ${keys.join(', ')} (resolve the conflict, then re-run — idempotent)`)
+      }
+    }
     if (s.flaggedForHumanReview > 0) {
       const fields = Object.entries(s.flaggedFieldCounts)
         .map(([field, count]) => `${field}=${count}`)
@@ -188,6 +206,12 @@ async function runMigration(apply: boolean): Promise<void> {
   if (!apply) {
     console.log('\nDry run complete. Re-run with --apply to write these patches.')
   }
+  console.log(
+    '\nNote: documents listed under "conflicting" are written to on neither dry-run nor --apply.',
+    'Resolve each conflict by hand (the canonical value always wins automatically; edit it if the legacy',
+    'value was actually correct), then re-run --apply — the migration is idempotent, so it will pick up',
+    'exactly the previously-withheld clean fields for those documents and change nothing else.',
+  )
 }
 
 async function main(): Promise<void> {
