@@ -276,3 +276,42 @@ export type PricingRuleCreate = z.infer<typeof PricingRuleCreate>
 
 export const PricingRuleUpdate = PricingRuleCreate.partial().openapi('PricingRuleUpdate')
 export type PricingRuleUpdate = z.infer<typeof PricingRuleUpdate>
+
+export const TEMPLATE_FEATURES = [
+  'service-definitions',
+  'add-ons',
+  'pricing-rules',
+  'service-areas',
+  'promo-codes',
+  'broadcasts',
+] as const
+export type TemplateFeature = (typeof TEMPLATE_FEATURES)[number]
+
+/**
+ * A saved, reusable starting point for one admin feature's form.
+ *
+ * The WRAPPER is strictly typed — `feature` is constrained so a typo cannot
+ * orphan a template under a key no screen lists, and `name` is required so a
+ * template is always pickable by a human. `payload` is deliberately open: it
+ * holds one feature's field values, and a service definition and a promo code
+ * share no shape. That openness is scoped to the blob, unlike the historical
+ * `FeatureCreate` passthrough where nothing at all was validated.
+ *
+ * A payload is a snapshot from save time and may predate a schema change, so
+ * applying a template must fill the form and let normal validation run — never
+ * write straight through.
+ */
+export const FeatureTemplateCreate = z
+  .object({
+    feature: z.enum(TEMPLATE_FEATURES),
+    name: z.string().min(1).max(120),
+    description: z.string().max(500).optional(),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .openapi('FeatureTemplateCreate')
+export type FeatureTemplateCreate = z.infer<typeof FeatureTemplateCreate>
+
+export const FeatureTemplateUpdate = FeatureTemplateCreate.partial().openapi(
+  'FeatureTemplateUpdate',
+)
+export type FeatureTemplateUpdate = z.infer<typeof FeatureTemplateUpdate>
