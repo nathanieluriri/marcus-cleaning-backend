@@ -11,6 +11,8 @@ import {
   ServiceAreaUpdate,
   PricingRuleCreate,
   PricingRuleUpdate,
+  FeatureTemplateCreate,
+  FeatureTemplateUpdate,
 } from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
@@ -67,6 +69,16 @@ const promoCodes = crudRouter({
 })
 const payoutAdjustments = crudRouter({ collection: 'payout_adjustment', tag: 'PayoutAdjustments', noun: 'payout adjustment' })
 const chatInterventions = crudRouter({ collection: 'chat_intervention', tag: 'ChatInterventions', noun: 'chat intervention' })
+// Shared, admin-only feature templates. Note: crudRouter's GET only supports
+// limit/skip pagination, not a `feature` filter — the collection is small and
+// admin-only, so the frontend fetches all templates and filters client-side.
+const featureTemplates = crudRouter({
+  collection: 'admin_feature_templates',
+  tag: 'FeatureTemplates',
+  noun: 'template',
+  createSchema: FeatureTemplateCreate,
+  updateSchema: FeatureTemplateUpdate,
+})
 
 export const adminFeatures = createRouter()
 
@@ -79,6 +91,7 @@ adminFeatures.route('/availability-overrides', availabilityOverrides)
 adminFeatures.route('/promo-codes', promoCodes)
 adminFeatures.route('/payout-adjustments', payoutAdjustments)
 adminFeatures.route('/chat-interventions', chatInterventions)
+adminFeatures.route('/feature-templates', featureTemplates)
 
 // --- features with extra endpoints ---
 adminFeatures.route('/service-credits', serviceCredits)
