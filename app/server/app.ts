@@ -36,6 +36,8 @@ import { cleanerApplications } from './routes/cleaner-applications'
 import { cleanerWorkspace } from './routes/cleaner-workspace'
 import { adminSafety } from './routes/admin-safety'
 import { adminBroadcasts } from './routes/admin-broadcasts'
+// TEMPORARY: one-off migration endpoint, remove after single run
+import { oneOffMigration } from './routes/one-off-migration'
 import { chat } from './routes/chat'
 import { devices } from './routes/devices'
 import { promotions } from './routes/promotions'
@@ -121,6 +123,8 @@ app.route('/api/v1/promotions', promotions)
 app.route('/api/v1/support', support)
 app.route('/api/v1/faq', faq)
 app.route('/api/cron', cron)
+// TEMPORARY: one-off migration endpoint, remove after single run
+app.route('/api/v1/one-off-migration', oneOffMigration)
 app.route('/api', health)
 
 // --- docs ---
