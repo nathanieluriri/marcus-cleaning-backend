@@ -41,6 +41,8 @@ import { devices } from './routes/devices'
 import { promotions } from './routes/promotions'
 import { support, faq } from './routes/support'
 import { cron } from './routes/cron'
+// TEMPORARY — see server/routes/one-off-migration.ts for removal steps.
+import { oneOffMigration } from './routes/one-off-migration'
 
 /**
  * Hono application. Mounted as a single Next.js catch-all route via hono/vercel.
@@ -121,6 +123,9 @@ app.route('/api/v1/promotions', promotions)
 app.route('/api/v1/support', support)
 app.route('/api/v1/faq', faq)
 app.route('/api/cron', cron)
+// TEMPORARY — delete this line + the file it imports once the migration has
+// run. See server/routes/one-off-migration.ts for the full removal steps.
+app.route('/api/v1/one-off-migration', oneOffMigration)
 app.route('/api', health)
 
 // --- docs ---

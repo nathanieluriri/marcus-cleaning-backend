@@ -9,6 +9,11 @@
  * invoked with the explicit `--apply` flag. No flag, a typo'd flag, or
  * `--dry-run` all fall through to the read-only path.
  *
+ * The actual scan/compute/write orchestration lives in
+ * `server/services/one-off-migration-service.ts`, shared with the temporary
+ * HTTP endpoint at `server/routes/one-off-migration.ts` — this script and
+ * that route can never drift apart on what "the migration" means.
+ *
  * INTENDED ORDER OF OPERATIONS:
  *   1. `--census`   read-only. Reports every distinct top-level key seen in
  *                   each collection, with counts. Run this FIRST to confirm
@@ -29,122 +34,12 @@
  *   npx tsx server/scripts/migrate-admin-feature-fields.ts --apply     # writes patches
  */
 
-import { closeClient, getDb } from '@/server/core/mongo'
+import { closeClient } from '@/server/core/mongo'
 import {
-  buildUpdateFilter,
-  migrateAddOn,
-  migratePromoCode,
-  migrateServiceDefinition,
-  type MigrationResult,
-} from '@/server/services/admin-feature-migration'
-
-interface CollectionSpec {
-  collection: string
-  label: string
-  migrate: (doc: Record<string, unknown>) => MigrationResult
-}
-
-const SPECS: CollectionSpec[] = [
-  { collection: 'service_definitions', label: 'service_definitions', migrate: migrateServiceDefinition },
-  { collection: 'addon_catalog', label: 'addon_catalog', migrate: migrateAddOn },
-  { collection: 'promo_code', label: 'promo_code', migrate: migratePromoCode },
-]
-
-interface CollectionSummary {
-  label: string
-  scanned: number
-  migrated: number
-  skippedAlreadyCanonical: number
-  conflicting: number
-  unrecognised: number
-  invalid: number
-  flaggedForHumanReview: number
-  conflictIds: string[]
-  /** _id -> canonical keys that migrated cleanly but were withheld because a sibling field conflicts. */
-  withheldByConflictId: Record<string, string[]>
-  withheldFieldTotal: number
-  flaggedFieldCounts: Record<string, number>
-}
-
-/**
- * `apply: false` (the default) never calls `updateOne` — it only computes
- * and returns the summary, which is the whole of the dry-run guarantee.
- */
-async function runCollection(spec: CollectionSpec, apply: boolean): Promise<CollectionSummary> {
-  const db = getDb()
-  const coll = db.collection(spec.collection)
-  const cursor = coll.find({})
-
-  const summary: CollectionSummary = {
-    label: spec.label,
-    scanned: 0,
-    migrated: 0,
-    skippedAlreadyCanonical: 0,
-    conflicting: 0,
-    unrecognised: 0,
-    invalid: 0,
-    flaggedForHumanReview: 0,
-    conflictIds: [],
-    withheldByConflictId: {},
-    withheldFieldTotal: 0,
-    flaggedFieldCounts: {},
-  }
-
-  for await (const doc of cursor) {
-    summary.scanned += 1
-    const result = spec.migrate(doc as Record<string, unknown>)
-
-    if (result.invalid.length > 0) summary.invalid += 1
-    if (result.flagged.length > 0) {
-      summary.flaggedForHumanReview += 1
-      for (const field of result.flagged) {
-        summary.flaggedFieldCounts[field] = (summary.flaggedFieldCounts[field] ?? 0) + 1
-      }
-    }
-
-    // Priority mirrors "stop being silent about it" (Finding 5): a real
-    // contradiction is always surfaced, even if some other field on the
-    // same doc would also migrate cleanly.
-    if (result.conflicts.length > 0) {
-      summary.conflicting += 1
-      const id = String((doc as Record<string, unknown>)._id)
-      summary.conflictIds.push(id)
-      if (result.withheldKeys.length > 0) {
-        summary.withheldByConflictId[id] = result.withheldKeys
-        summary.withheldFieldTotal += result.withheldKeys.length
-      }
-    } else if (result.changed) {
-      summary.migrated += 1
-      if (apply) {
-        // Finding 2: re-check the precondition at write time, not just at
-        // read time — see `buildUpdateFilter` for why.
-        await coll.updateOne(buildUpdateFilter(doc._id, result.patch), { $set: result.patch })
-      }
-    } else if (result.recognised) {
-      summary.skippedAlreadyCanonical += 1
-    } else {
-      summary.unrecognised += 1
-    }
-  }
-
-  return summary
-}
-
-/** Read-only: distinct top-level key names per collection, with document counts. */
-async function censusCollection(spec: CollectionSpec): Promise<Map<string, number>> {
-  const db = getDb()
-  const coll = db.collection(spec.collection)
-  const cursor = coll.find({})
-  const counts = new Map<string, number>()
-
-  for await (const doc of cursor) {
-    for (const key of Object.keys(doc as Record<string, unknown>)) {
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-  }
-
-  return counts
-}
+  computeCensus,
+  runMigration,
+  type CollectionSummary,
+} from '@/server/services/one-off-migration-service'
 
 function parseArgs(argv: string[]): { apply: boolean; census: boolean } {
   // Default is dry-run. Only the exact, explicit `--apply` flag switches to
@@ -158,11 +53,10 @@ function parseArgs(argv: string[]): { apply: boolean; census: boolean } {
 
 async function runCensus(): Promise<void> {
   console.log('Running in CENSUS mode (read-only) — reporting distinct top-level keys per collection.\n')
-  for (const spec of SPECS) {
-    const counts = await censusCollection(spec)
-    console.log(`${spec.label}:`)
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
-    for (const [key, count] of sorted) {
+  const collections = await computeCensus()
+  for (const { label, fields } of collections) {
+    console.log(`${label}:`)
+    for (const { key, count } of fields) {
       console.log(`  ${key}: ${count}`)
     }
     console.log('')
@@ -172,14 +66,7 @@ async function runCensus(): Promise<void> {
   console.log('before running --dry-run and then --apply.')
 }
 
-async function runMigration(apply: boolean): Promise<void> {
-  console.log(apply ? 'Running in APPLY mode — documents will be written.' : 'Running in DRY-RUN mode (default) — no documents will be written.')
-
-  const summaries: CollectionSummary[] = []
-  for (const spec of SPECS) {
-    summaries.push(await runCollection(spec, apply))
-  }
-
+function printSummaries(summaries: CollectionSummary[], apply: boolean): void {
   console.log('\nSummary:')
   for (const s of summaries) {
     console.log(
@@ -217,6 +104,12 @@ async function runMigration(apply: boolean): Promise<void> {
   )
 }
 
+async function runMigrationCli(apply: boolean): Promise<void> {
+  console.log(apply ? 'Running in APPLY mode — documents will be written.' : 'Running in DRY-RUN mode (default) — no documents will be written.')
+  const summaries = await runMigration(apply)
+  printSummaries(summaries, apply)
+}
+
 async function main(): Promise<void> {
   const { apply, census } = parseArgs(process.argv.slice(2))
 
@@ -225,7 +118,7 @@ async function main(): Promise<void> {
     return
   }
 
-  await runMigration(apply)
+  await runMigrationCli(apply)
 }
 
 main()
@@ -235,8 +128,8 @@ main()
   .catch(async (err) => {
     console.error(err)
     await closeClient()
-    // Finding 3: use `process.exitCode` + let Node exit naturally, instead
-    // of `process.exit`, which can truncate buffered stdout/stderr and skips
+    // Use `process.exitCode` + let Node exit naturally, instead of
+    // `process.exit`, which can truncate buffered stdout/stderr and skips
     // the client-close path entirely.
     process.exitCode = 1
   })
