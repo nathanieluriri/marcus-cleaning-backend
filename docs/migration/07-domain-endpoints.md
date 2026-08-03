@@ -265,6 +265,7 @@ These render HTML (Jinja today). Options: port to a Next.js page/route returning
 3. **`/docs` → `/api/reference`** redirect (Scalar replaces Swagger).
 4. **`/v1/notificationss`** spelling — keep verbatim or correct with redirect (team decision).
 5. **Auth tokens** — token *format* changes (now our JWT for all roles) but the login/refresh request/response *shapes* are preserved; admin clients that talked to Auth0 directly must switch to backend login (`03`, `14`).
+6. **Admin-feature schema tightening** — five endpoints (`/service-definitions`, `/add-ons`, `/promo-codes`, `/service-areas`, `/pricing-rules`) now validate request bodies instead of accepting arbitrary JSON; unknown keys are stripped rather than rejected, so an old client gets a 200 instead of a 422 — but note the consequence: **an older admin-console build sending `display_name` / `is_active` / `price_minor` / `discount_value` has its edit silently discarded.** Deploy the admin console FIRST, then this. `service_definitions`, `addon_catalog`, and `promo_code` moved to canonical camelCase field names (fixing silent failures: add-ons priced at 0, promos discounted 0%, Active toggles ignored); `service_area_boundary` and `dynamic_pricing_rule` retain snake_case names as they have no backend consumers. Money fields are in major units. See migration script `app/server/scripts/migrate-admin-feature-fields.ts` (dry-run by default; `--census` and `--apply` modes; not yet run against any database).
 
 ## Cross-references
 

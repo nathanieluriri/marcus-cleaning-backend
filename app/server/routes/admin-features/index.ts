@@ -1,5 +1,17 @@
 import { createRouter } from '@/server/core/router'
 import { crudRouter } from './_crud'
+import {
+  ServiceDefinitionCreate,
+  ServiceDefinitionUpdate,
+  AddOnCreate,
+  AddOnUpdate,
+  PromoCodeCreate,
+  PromoCodeUpdate,
+  ServiceAreaCreate,
+  ServiceAreaUpdate,
+  PricingRuleCreate,
+  PricingRuleUpdate,
+} from '@/server/schemas/admin-features'
 import { serviceCredits } from './service-credits'
 import { broadcasts } from './broadcasts'
 import { conciergeBookings } from './concierge-bookings'
@@ -16,13 +28,43 @@ import { claimReviews } from './claim-reviews'
  */
 
 // --- plain CRUD features (collection names per docs/migration/02-data-model.md) ---
-const serviceDefinitions = crudRouter({ collection: 'service_definitions', tag: 'ServiceDefinitions', noun: 'service definition' })
-const addOns = crudRouter({ collection: 'addon_catalog', tag: 'AddOns', noun: 'add-on' })
-const pricingRules = crudRouter({ collection: 'dynamic_pricing_rule', tag: 'PricingRules', noun: 'pricing rule' })
-const serviceAreas = crudRouter({ collection: 'service_area_boundary', tag: 'ServiceAreas', noun: 'service area' })
+const serviceDefinitions = crudRouter({
+  collection: 'service_definitions',
+  tag: 'ServiceDefinitions',
+  noun: 'service definition',
+  createSchema: ServiceDefinitionCreate,
+  updateSchema: ServiceDefinitionUpdate,
+})
+const addOns = crudRouter({
+  collection: 'addon_catalog',
+  tag: 'AddOns',
+  noun: 'add-on',
+  createSchema: AddOnCreate,
+  updateSchema: AddOnUpdate,
+})
+const pricingRules = crudRouter({
+  collection: 'dynamic_pricing_rule',
+  tag: 'PricingRules',
+  noun: 'pricing rule',
+  createSchema: PricingRuleCreate,
+  updateSchema: PricingRuleUpdate,
+})
+const serviceAreas = crudRouter({
+  collection: 'service_area_boundary',
+  tag: 'ServiceAreas',
+  noun: 'service area',
+  createSchema: ServiceAreaCreate,
+  updateSchema: ServiceAreaUpdate,
+})
 const cleanerTags = crudRouter({ collection: 'cleaner_skill_equipment_tag', tag: 'CleanerTags', noun: 'cleaner tag' })
 const availabilityOverrides = crudRouter({ collection: 'availability_override', tag: 'AvailabilityOverrides', noun: 'availability override' })
-const promoCodes = crudRouter({ collection: 'promo_code', tag: 'PromoCodes', noun: 'promo code' })
+const promoCodes = crudRouter({
+  collection: 'promo_code',
+  tag: 'PromoCodes',
+  noun: 'promo code',
+  createSchema: PromoCodeCreate,
+  updateSchema: PromoCodeUpdate,
+})
 const payoutAdjustments = crudRouter({ collection: 'payout_adjustment', tag: 'PayoutAdjustments', noun: 'payout adjustment' })
 const chatInterventions = crudRouter({ collection: 'chat_intervention', tag: 'ChatInterventions', noun: 'chat intervention' })
 
