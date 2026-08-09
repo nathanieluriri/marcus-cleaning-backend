@@ -129,14 +129,17 @@ export async function reverseGeocode(q: ReverseGeocodeQuery): Promise<PlaceDetai
   return mapDetails(first)
 }
 
+/** Component lookup by Google `types` entry, bound to one result. */
+function componentFinder(r: GoogleResult): (type: string) => GoogleComponent | undefined {
+  const components: GoogleComponent[] = Array.isArray(r.address_components) ? r.address_components : []
+  return (type) => components.find((c) => Array.isArray(c.types) && c.types.includes(type))
+}
+
 /** Map a Google place/geocode result into our PlaceDetails shape. */
 function mapDetails(r: GoogleResult): PlaceDetails {
-  const components: GoogleComponent[] = Array.isArray(r.address_components) ? r.address_components : []
-  const find = (type: string) => components.find((c) => Array.isArray(c.types) && c.types.includes(type))
-  const country = find('country') as GoogleComponent | undefined
-  const city = (find('locality') ?? find('administrative_area_level_2') ?? find('administrative_area_level_1')) as
-    | GoogleComponent
-    | undefined
+  const find = componentFinder(r)
+  const country = find('country')
+  const city = find('locality') ?? find('administrative_area_level_2') ?? find('administrative_area_level_1')
   const postal = find('postal_code')
   const loc = r.geometry?.location
   return {
@@ -148,6 +151,56 @@ function mapDetails(r: GoogleResult): PlaceDetails {
     countryCode: country?.short_name ?? null,
     city: city?.long_name ?? null,
     postalCode: postal?.long_name ?? null,
+  }
+}
+
+// --- address resolution ------------------------------------------------------
+
+/**
+ * Address snapshot stored on a saved address. Superset of `PlaceDetails`:
+ * adds `line1` (street number + route) and `state`, which the public
+ * PlaceDetails contract does not expose.
+ */
+export interface ResolvedAddress {
+  formattedAddress: string | null
+  line1: string | null
+  city: string | null
+  state: string | null
+  postalCode: string | null
+  country: string | null
+  latitude: number | null
+  longitude: number | null
+}
+
+/**
+ * Resolve a Google `place_id` into the address snapshot persisted on
+ * `saved_addresses`. Throws AppError (502/503) if the provider is unconfigured
+ * or fails — a saved address without coordinates breaks distance matching
+ * downstream, so we surface the failure rather than storing nulls.
+ */
+export async function resolveAddress(placeId: string): Promise<ResolvedAddress> {
+  const body = await googleGet('place/details/json', {
+    place_id: placeId,
+    fields: 'place_id,formatted_address,geometry/location,address_components',
+  })
+  const r = body.result
+  if (!r) throw badRequest('Place not found', { placeId })
+
+  const find = componentFinder(r)
+  const streetNumber = find('street_number')?.long_name
+  const route = find('route')?.long_name
+  const line1 = [streetNumber, route].filter(Boolean).join(' ') || null
+
+  const d = mapDetails(r)
+  return {
+    formattedAddress: d.formattedAddress,
+    line1,
+    city: d.city,
+    state: find('administrative_area_level_1')?.long_name ?? null,
+    postalCode: d.postalCode,
+    country: d.country,
+    latitude: d.latitude,
+    longitude: d.longitude,
   }
 }
 

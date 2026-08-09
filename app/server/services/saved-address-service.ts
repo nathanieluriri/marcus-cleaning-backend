@@ -1,14 +1,15 @@
 import { notFound } from '@/server/core/errors'
 import * as savedAddressRepo from '@/server/repositories/saved-address-repo'
+import * as placeService from '@/server/services/place-service'
 import type { SavedAddressDoc, SavedAddressOut, SavedAddressCreate, SavedAddressUpdate } from '@/server/schemas/saved-address'
 
 /**
  * Saved-address business logic. No HTTP types here (cron/tests can reuse).
  *
  * Addresses are created from a `place_id`; the server resolves the place
- * details. The Places service is owned by another agent and built separately,
- * so detail resolution is STUBBED here (see `resolvePlace`) — wire it up to the
- * real place-service once available.
+ * details via `place-service.resolveAddress` and stores a snapshot. The stored
+ * lat/lng is what cleaner-job distance matching reads, so resolution failures
+ * propagate (502/503) rather than persisting an address with null coordinates.
  *
  * See: docs/migration/07-domain-endpoints.md, docs/migration/02-data-model.md
  */
@@ -17,45 +18,13 @@ function nowEpoch(): number {
   return Math.floor(Date.now() / 1000)
 }
 
-interface ResolvedPlace {
-  formattedAddress: string | null
-  line1: string | null
-  city: string | null
-  state: string | null
-  postalCode: string | null
-  country: string | null
-  latitude: number | null
-  longitude: number | null
-}
-
-/**
- * STUB: resolve a Google place_id to address detail fields.
- *
- * The real implementation belongs to the place-service (built by another
- * agent). We deliberately do NOT import it here to avoid a cross-agent coupling
- * / circular wiring. When place-service lands, replace the body with a call to
- * its `getDetails(placeId)` and map the result onto ResolvedPlace.
- */
-async function resolvePlace(_placeId: string): Promise<ResolvedPlace> {
-  return {
-    formattedAddress: null,
-    line1: null,
-    city: null,
-    state: null,
-    postalCode: null,
-    country: null,
-    latitude: null,
-    longitude: null,
-  }
-}
-
 export async function list(customerId: string): Promise<SavedAddressOut[]> {
   return savedAddressRepo.listByCustomer(customerId)
 }
 
 export async function create(customerId: string, payload: SavedAddressCreate): Promise<SavedAddressOut> {
   const ts = nowEpoch()
-  const resolved = await resolvePlace(payload.place_id)
+  const resolved = await placeService.resolveAddress(payload.place_id)
   const doc: SavedAddressDoc = {
     customerId,
     placeId: payload.place_id,
