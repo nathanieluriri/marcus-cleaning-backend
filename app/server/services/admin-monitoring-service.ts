@@ -41,11 +41,11 @@ export async function sessionAnomalies(): Promise<Record<string, unknown>> {
   return { items: [] }
 }
 
-export async function slaAlerts(args: { limit?: number; skip?: number }) {
+export async function slaAlerts(args: Omit<monitoringRepo.AlertListOptions, 'slaOnly'> = {}) {
   return monitoringRepo.listAlerts({ ...args, slaOnly: true })
 }
 
-export async function alerts(args: { limit?: number; skip?: number }) {
+export async function alerts(args: monitoringRepo.AlertListOptions = {}) {
   return monitoringRepo.listAlerts(args)
 }
 
@@ -63,7 +63,7 @@ export async function ackAlert(alertId: string, adminId: string): Promise<Record
 
 // --- audit history ---
 
-export function auditHistory(args: { limit?: number; skip?: number }) {
+export function auditHistory(args: monitoringRepo.AuditEventListOptions = {}) {
   return monitoringRepo.listAuditEvents(args)
 }
 

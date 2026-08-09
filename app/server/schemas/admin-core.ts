@@ -149,6 +149,48 @@ export const AdminListQuery = z.object({
 })
 export type AdminListQuery = z.infer<typeof AdminListQuery>
 
+/**
+ * Per-route query schemas for the monitoring lists.
+ *
+ * `AdminListQuery` stays the shared pagination base. Routes that accept filters
+ * extend it rather than reusing it bare, because a Zod object silently drops keys
+ * it doesn't declare: `/monitoring/alerts`, `/monitoring/alerts/sla` and
+ * `/monitoring/audit/history` all advertised a filter UI whose params were parsed
+ * away before the handler ran. Declaring them per route also makes each route's
+ * OpenAPI entry list the params it actually honours.
+ *
+ * Wire names stay snake_case for client parity; routes map them to the camelCase
+ * repo options. Booleans are enums rather than `z.coerce.boolean()`, which would
+ * read the string `'false'` as `true`. No `.transform()` here — transforms produce
+ * ZodEffects, which the OpenAPI generator can't describe as a query parameter.
+ */
+export const AlertListQuery = AdminListQuery.extend({
+  status: z.enum(['open', 'acknowledged']).optional(),
+  unreadOnly: z.enum(['true', 'false']).optional(),
+})
+export type AlertListQuery = z.infer<typeof AlertListQuery>
+
+export const SlaAlertsQuery = AdminListQuery.extend({
+  hours: z.coerce.number().int().positive().max(24 * 365).optional(),
+})
+export type SlaAlertsQuery = z.infer<typeof SlaAlertsQuery>
+
+export const AuditHistoryQuery = AdminListQuery.extend({
+  cursor: z.string().optional(),
+  sort: z.enum(['asc', 'desc']).optional(),
+  actor_id: z.string().optional(),
+  target_id: z.string().optional(),
+  endpoint: z.string().optional(),
+  event_type: z.string().optional(),
+  status: z.string().optional(),
+  severity: z.string().optional(),
+  /** Comma-joined on the wire (`tags=auth,admin`); split in the route. */
+  tags: z.string().optional(),
+  from_epoch: z.coerce.number().int().optional(),
+  to_epoch: z.coerce.number().int().optional(),
+})
+export type AuditHistoryQuery = z.infer<typeof AuditHistoryQuery>
+
 export const AutocompleteQuery = z.object({
   q: z.string().optional(),
   search: z.string().optional(),
