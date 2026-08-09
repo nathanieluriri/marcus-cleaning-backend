@@ -64,7 +64,14 @@ These compile and return well-shaped responses but need real logic / parity wiri
 
 - **Cash-out settlement**: a cash-out creates a PENDING payout and reserves the balance; the
   provider transfer itself is not wired to a live account yet.
-- **Geo matching**: `distanceMiles` / `isPriority` on cleaner jobs remain stubbed.
+- **Geo matching**: `distanceMiles` is real end-to-end — saving an address resolves its
+  `place_id` through `place-service.resolveAddress` (Google Place Details) and stores the
+  coordinates, which cleaner-job listing haversines against the caller's `lat`/`lng`.
+  Requires `GOOGLE_MAPS_API_KEY`. Resolution is best-effort: if the provider is
+  unconfigured or failing, the address still saves but with null coordinates and a
+  `[saved-address]` error log, and its jobs report `distanceMiles: null`. There is no
+  backfill — such an address stays unresolved until saved again.
+  `isPriority` on cleaner jobs remains stubbed.
 - **Admin analytics**: monitoring overview/heatmap/denied-top/anomalies and
   signups-trend return shaped zeroed data; aggregations pending.
 - **Audit export**: on-demand record + JSON stub; wire S3/Blob signed-URL download.
