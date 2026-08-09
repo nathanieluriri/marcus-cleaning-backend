@@ -1,0 +1,11 @@
+# Repo-root ignores.
+#
+# `app/.gitignore` only governs paths under `app/`, so a root-level install was
+# left untracked-but-unignored — one `git add -A` away from committing the whole
+# dependency tree. Unanchored so nested installs are covered too.
+
+# dependencies
+node_modules/
+
+# misc
+.DS_Store
