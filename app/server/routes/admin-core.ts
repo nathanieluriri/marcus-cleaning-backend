@@ -15,6 +15,9 @@ import {
   AdminCreateSignup,
   AuditExportRequest,
   AdminListQuery,
+  AlertListQuery,
+  AuditHistoryQuery,
+  SlaAlertsQuery,
   AutocompleteQuery,
   GenericObject,
   GenericList,
@@ -67,6 +70,21 @@ const jsonOk = <T extends z.ZodTypeAny>(schema: T) => ({
   200: { description: 'OK', content: { 'application/json': { schema: envelopeOf(schema) } } },
   ...errs,
 })
+
+/**
+ * Audit tags arrive comma-joined (`tags=auth,admin`). Split here rather than in the
+ * Zod schema: a `.transform()` yields a ZodEffects the OpenAPI generator can't render
+ * as a query parameter. Returns undefined for absent/blank input so the repo omits
+ * the filter entirely instead of matching on an empty list.
+ */
+function splitTags(raw?: string): string[] | undefined {
+  if (!raw) return undefined
+  const tags = raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t !== '')
+  return tags.length > 0 ? tags : undefined
+}
 
 // Guard every admin-core path. Hono path-pattern guards use ':param' syntax.
 const GUARDED = [
@@ -600,20 +618,32 @@ adminCore.openapi(
 )
 
 adminCore.openapi(
-  createRoute({ method: 'get', path: '/monitoring/alerts/sla', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AdminListQuery }, responses: jsonOk(GenericList) }),
+  createRoute({ method: 'get', path: '/monitoring/alerts/sla', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: SlaAlertsQuery }, responses: jsonOk(GenericList) }),
   async (c) => {
     principalOf(c)
-    const { limit, skip } = c.req.valid('query')
-    return c.json(ok(c, 'SLA alerts', await monitoring.slaAlerts({ limit, skip })), 200)
+    const { limit, skip, hours } = c.req.valid('query')
+    return c.json(ok(c, 'SLA alerts', await monitoring.slaAlerts({ limit, skip, hours })), 200)
   },
 )
 
 adminCore.openapi(
-  createRoute({ method: 'get', path: '/monitoring/alerts', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AdminListQuery }, responses: jsonOk(GenericList) }),
+  createRoute({ method: 'get', path: '/monitoring/alerts', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AlertListQuery }, responses: jsonOk(GenericList) }),
   async (c) => {
     principalOf(c)
-    const { limit, skip } = c.req.valid('query')
-    return c.json(ok(c, 'Alerts', await monitoring.alerts({ limit, skip })), 200)
+    const { limit, skip, status, unreadOnly } = c.req.valid('query')
+    return c.json(
+      ok(
+        c,
+        'Alerts',
+        await monitoring.alerts({
+          limit,
+          skip,
+          status,
+          unreadOnly: unreadOnly === undefined ? undefined : unreadOnly === 'true',
+        }),
+      ),
+      200,
+    )
   },
 )
 
@@ -672,11 +702,32 @@ adminCore.openapi(
 )
 
 adminCore.openapi(
-  createRoute({ method: 'get', path: '/monitoring/audit/history', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AdminListQuery }, responses: jsonOk(GenericList) }),
+  createRoute({ method: 'get', path: '/monitoring/audit/history', tags: [TAG], security: [{ bearerAuth: [] }], request: { query: AuditHistoryQuery }, responses: jsonOk(GenericList) }),
   async (c) => {
     principalOf(c)
-    const { limit, skip } = c.req.valid('query')
-    return c.json(ok(c, 'Audit history', await monitoring.auditHistory({ limit, skip })), 200)
+    const q = c.req.valid('query')
+    return c.json(
+      ok(
+        c,
+        'Audit history',
+        await monitoring.auditHistory({
+          limit: q.limit,
+          skip: q.skip,
+          cursor: q.cursor,
+          sort: q.sort,
+          actorId: q.actor_id,
+          targetId: q.target_id,
+          endpoint: q.endpoint,
+          eventType: q.event_type,
+          status: q.status,
+          severity: q.severity,
+          tags: splitTags(q.tags),
+          fromEpoch: q.from_epoch,
+          toEpoch: q.to_epoch,
+        }),
+      ),
+      200,
+    )
   },
 )
 
