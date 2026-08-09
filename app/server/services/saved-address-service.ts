@@ -8,8 +8,13 @@ import type { SavedAddressDoc, SavedAddressOut, SavedAddressCreate, SavedAddress
  *
  * Addresses are created from a `place_id`; the server resolves the place
  * details via `place-service.resolveAddress` and stores a snapshot. The stored
- * lat/lng is what cleaner-job distance matching reads, so resolution failures
- * propagate (502/503) rather than persisting an address with null coordinates.
+ * lat/lng is what cleaner-job distance matching reads.
+ *
+ * Resolution is best-effort: if the provider is unconfigured or fails we log
+ * and save the address with null detail fields rather than blocking the
+ * customer from saving it. Such an address yields `distanceMiles: null` on
+ * cleaner jobs, and there is currently no backfill — it stays unresolved until
+ * the customer saves the address again. Watch the log line below.
  *
  * See: docs/migration/07-domain-endpoints.md, docs/migration/02-data-model.md
  */
@@ -18,13 +23,34 @@ function nowEpoch(): number {
   return Math.floor(Date.now() / 1000)
 }
 
+const UNRESOLVED: placeService.ResolvedAddress = {
+  formattedAddress: null,
+  line1: null,
+  city: null,
+  state: null,
+  postalCode: null,
+  country: null,
+  latitude: null,
+  longitude: null,
+}
+
+/** Resolve a place_id, degrading to null detail fields on provider failure. */
+async function resolveOrDegrade(placeId: string): Promise<placeService.ResolvedAddress> {
+  try {
+    return await placeService.resolveAddress(placeId)
+  } catch (err) {
+    console.error('[saved-address] place resolution failed; saving without coordinates', placeId, err)
+    return UNRESOLVED
+  }
+}
+
 export async function list(customerId: string): Promise<SavedAddressOut[]> {
   return savedAddressRepo.listByCustomer(customerId)
 }
 
 export async function create(customerId: string, payload: SavedAddressCreate): Promise<SavedAddressOut> {
   const ts = nowEpoch()
-  const resolved = await placeService.resolveAddress(payload.place_id)
+  const resolved = await resolveOrDegrade(payload.place_id)
   const doc: SavedAddressDoc = {
     customerId,
     placeId: payload.place_id,
