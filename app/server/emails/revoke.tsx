@@ -19,7 +19,7 @@ export function RevokeEmail({ userEmail, reason }: RevokeEmailProps) {
         <Container style={container}>
           <Heading style={heading}>Your Marcus Cleaning access has been revoked</Heading>
           <Text style={text}>
-            Access for the account {userEmail} has been revoked.
+            Access for the account {userEmail}{' '}has been revoked.
             {reason ? ` Reason: ${reason}.` : ''}
           </Text>
           <Text style={muted}>

@@ -22,7 +22,7 @@ export function AdminInviteEmail({ inviteeEmail, tempPassword, invitedByName, lo
         <Container style={container}>
           <Heading style={heading}>You&apos;ve been invited to Marcus Cleaning</Heading>
           <Text style={text}>
-            {invitedByName ? `${invitedByName} has invited` : 'You have been invited'} {inviteeEmail} to join the
+            {invitedByName ? `${invitedByName} has invited` : 'You have been invited'} {inviteeEmail}{' '}to join the
             Marcus Cleaning admin portal. Use the temporary password below to sign in — you&apos;ll be asked to set
             a new password immediately.
           </Text>
