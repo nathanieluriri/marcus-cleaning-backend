@@ -20,7 +20,7 @@ export function InvitationEmail({ inviteeEmail, inviteUrl, invitedByName }: Invi
         <Container style={container}>
           <Heading style={heading}>You&apos;ve been invited to Marcus Cleaning</Heading>
           <Text style={text}>
-            {invitedByName ? `${invitedByName} has invited` : 'You have been invited'} {inviteeEmail} to join the
+            {invitedByName ? `${invitedByName} has invited` : 'You have been invited'} {inviteeEmail}{' '}to join the
             Marcus Cleaning admin portal.
           </Text>
           <Section style={btnWrap}>

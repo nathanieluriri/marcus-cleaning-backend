@@ -20,6 +20,9 @@ function cleaners(): Collection<Document> {
   return getDb().collection<Document>('cleaners')
 }
 
+/** Account documents carry the bcrypt password hash; no admin view returns it. */
+const HIDE_SECRETS = { projection: { password: 0 } }
+
 export interface DirectoryListResult {
   items: Array<Record<string, unknown>>
   total: number
@@ -50,7 +53,7 @@ async function listFrom(coll: Collection<Document>, params: ListParams): Promise
   const skip = Math.max(params.skip ?? 0, 0)
   const filter = { ...(params.filter ?? {}), ...searchFilter(params.search) } as Filter<Document>
   const [rows, total] = await Promise.all([
-    coll.find(filter).sort({ _id: -1 }).skip(skip).limit(limit).toArray(),
+    coll.find(filter, HIDE_SECRETS).sort({ _id: -1 }).skip(skip).limit(limit).toArray(),
     coll.countDocuments(filter),
   ])
   return { items: rows.map(fromDoc), total }
@@ -63,7 +66,7 @@ export function listCustomers(params: ListParams): Promise<DirectoryListResult> 
 }
 
 export async function getCustomerById(id: string): Promise<Record<string, unknown> | null> {
-  const row = await customers().findOne(idFilter(id))
+  const row = await customers().findOne(idFilter(id), HIDE_SECRETS)
   return row ? fromDoc(row) : null
 }
 
@@ -74,7 +77,7 @@ export function listCleaners(params: ListParams): Promise<DirectoryListResult> {
 }
 
 export async function getCleanerById(id: string): Promise<Record<string, unknown> | null> {
-  const row = await cleaners().findOne(idFilter(id))
+  const row = await cleaners().findOne(idFilter(id), HIDE_SECRETS)
   return row ? fromDoc(row) : null
 }
 
